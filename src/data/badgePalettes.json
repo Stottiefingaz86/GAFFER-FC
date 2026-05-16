@@ -1,0 +1,427 @@
+{
+  "crest-ch-01.png": {
+    "accent": "#010F3E",
+    "primary": "#053269",
+    "secondary": "#63708B"
+  },
+  "crest-ch-02.png": {
+    "accent": "#DCC6AF",
+    "primary": "#17882C",
+    "secondary": "#013E3A"
+  },
+  "crest-ch-03.png": {
+    "accent": "#BE6155",
+    "primary": "#C20E0C",
+    "secondary": "#540605"
+  },
+  "crest-ch-04.png": {
+    "accent": "#C28A88",
+    "primary": "#BD080A",
+    "secondary": "#AB4240"
+  },
+  "crest-ch-05.png": {
+    "accent": "#394B70",
+    "primary": "#054489",
+    "secondary": "#7586A2"
+  },
+  "crest-ch-07.png": {
+    "accent": "#FAF59E",
+    "primary": "#E2AF2E",
+    "secondary": "#AB7E1F"
+  },
+  "crest-ch-08.png": {
+    "accent": "#031037",
+    "primary": "#06316A",
+    "secondary": "#586783"
+  },
+  "crest-ch-09.png": {
+    "accent": "#4F5878",
+    "primary": "#01418C",
+    "secondary": "#F2AD24"
+  },
+  "crest-ch-10.png": {
+    "accent": "#BF807F",
+    "primary": "#AB090B",
+    "secondary": "#B44A46"
+  },
+  "crest-ch-11.png": {
+    "accent": "#4A6E36",
+    "primary": "#FCD505",
+    "secondary": "#064D1E"
+  },
+  "crest-ch-12.png": {
+    "accent": "#00000C",
+    "primary": "#041E48",
+    "secondary": "#FFFFFF"
+  },
+  "crest-ch-13.png": {
+    "accent": "#02092C",
+    "primary": "#495C78",
+    "secondary": "#0C2B59"
+  },
+  "crest-ch-14.png": {
+    "accent": "#00000C",
+    "primary": "#011E48",
+    "secondary": "#555D75"
+  },
+  "crest-ch-15.png": {
+    "accent": "#727D95",
+    "primary": "#232F55",
+    "secondary": "#033F81"
+  },
+  "crest-ch-16.png": {
+    "accent": "#46506B",
+    "primary": "#043774",
+    "secondary": "#D7CB94"
+  },
+  "crest-ch-17.png": {
+    "accent": "#9D1F1A",
+    "primary": "#460000",
+    "secondary": "#F9E6B8"
+  },
+  "crest-ch-18.png": {
+    "accent": "#D28F89",
+    "primary": "#077729",
+    "secondary": "#CB100F"
+  },
+  "crest-ch-19.png": {
+    "accent": "#C05A57",
+    "primary": "#C10A0B",
+    "secondary": "#6C0203"
+  },
+  "crest-ch-21.png": {
+    "accent": "#EAD28D",
+    "primary": "#F2B708",
+    "secondary": "#710204"
+  },
+  "crest-ch-22.png": {
+    "accent": "#01082C",
+    "primary": "#032A5E",
+    "secondary": "#5C6D85"
+  },
+  "crest-ch-23.png": {
+    "accent": "#DBBEA1",
+    "primary": "#096C29",
+    "secondary": "#C40808"
+  },
+  "crest-d1-01.png": {
+    "accent": "#FAE339",
+    "primary": "#E9AB08",
+    "secondary": "#916A18"
+  },
+  "crest-d1-02.png": {
+    "accent": "#430202",
+    "primary": "#BE0D0B",
+    "secondary": "#C66863"
+  },
+  "crest-d1-03.png": {
+    "accent": "#1D1B37",
+    "primary": "#D86608",
+    "secondary": "#062E68"
+  },
+  "crest-d1-04.png": {
+    "accent": "#010A3C",
+    "primary": "#042E66",
+    "secondary": "#3F4B69"
+  },
+  "crest-d1-05.png": {
+    "accent": "#974A1B",
+    "primary": "#581121",
+    "secondary": "#E9A322"
+  },
+  "crest-d1-06.png": {
+    "accent": "#B08E1E",
+    "primary": "#EBAD0A",
+    "secondary": "#6F4F12"
+  },
+  "crest-d1-07.png": {
+    "accent": "#64738F",
+    "primary": "#034791",
+    "secondary": "#000027"
+  },
+  "crest-d1-08.png": {
+    "accent": "#B43B37",
+    "primary": "#C20D0B",
+    "secondary": "#C5948B"
+  },
+  "crest-d1-09.png": {
+    "accent": "#C39864",
+    "primary": "#B30C08",
+    "secondary": "#EFB338"
+  },
+  "crest-d1-10.png": {
+    "accent": "#8995AA",
+    "primary": "#073C7B",
+    "secondary": "#425375"
+  },
+  "crest-d1-11.png": {
+    "accent": "#C20E0E",
+    "primary": "#B63D3C",
+    "secondary": "#390202"
+  },
+  "crest-d1-12.png": {
+    "accent": "#AF3F3F",
+    "primary": "#C90D0D",
+    "secondary": "#E3C6C0"
+  },
+  "crest-d1-13.png": {
+    "accent": "#596279",
+    "primary": "#033677",
+    "secondary": "#EE9024"
+  },
+  "crest-d1-14.png": {
+    "accent": "#B2802A",
+    "primary": "#EEA618",
+    "secondary": "#073062"
+  },
+  "crest-d1-15.png": {
+    "accent": "#F5DB88",
+    "primary": "#DB9334",
+    "secondary": "#611222"
+  },
+  "crest-d1-16.png": {
+    "accent": "#051F5A",
+    "primary": "#084589",
+    "secondary": "#6B7897"
+  },
+  "crest-d1-17.png": {
+    "accent": "#000B00",
+    "primary": "#054725",
+    "secondary": "#346248"
+  },
+  "crest-d1-18.png": {
+    "accent": "#9F8E60",
+    "primary": "#D19F1E",
+    "secondary": "#B6AB90"
+  },
+  "crest-d1-19.png": {
+    "accent": "#01032A",
+    "primary": "#0C346F",
+    "secondary": "#677291"
+  },
+  "crest-d1-20.png": {
+    "accent": "#560405",
+    "primary": "#BF0907",
+    "secondary": "#C7352C"
+  },
+  "crest-d1-21.png": {
+    "accent": "#F9E84A",
+    "primary": "#EBA825",
+    "secondary": "#8F070D"
+  },
+  "crest-d1-22.png": {
+    "accent": "#8792AA",
+    "primary": "#083E7C",
+    "secondary": "#65708E"
+  },
+  "crest-d1-23.png": {
+    "accent": "#717C97",
+    "primary": "#02256E",
+    "secondary": "#014526"
+  },
+  "crest-d1-24.png": {
+    "accent": "#EAD6AA",
+    "primary": "#05356F",
+    "secondary": "#FEFBD1"
+  },
+  "crest-d2-01.png": {
+    "accent": "#AD3433",
+    "primary": "#AF080B",
+    "secondary": "#D5A8A3"
+  },
+  "crest-d2-02.png": {
+    "accent": "#00042A",
+    "primary": "#00285A",
+    "secondary": "#414965"
+  },
+  "crest-d2-03.png": {
+    "accent": "#463514",
+    "primary": "#ECA31C",
+    "secondary": "#8C6C1D"
+  },
+  "crest-d2-05.png": {
+    "accent": "#FFF476",
+    "primary": "#E79D18",
+    "secondary": "#A87926"
+  },
+  "crest-d2-06.png": {
+    "accent": "#C80F0A",
+    "primary": "#864D48",
+    "secondary": "#900507"
+  },
+  "crest-d2-07.png": {
+    "accent": "#7F8AA3",
+    "primary": "#00164E",
+    "secondary": "#3F4667"
+  },
+  "crest-d2-08.png": {
+    "accent": "#01346F",
+    "primary": "#485573",
+    "secondary": "#E8AB26"
+  },
+  "crest-d2-09.png": {
+    "accent": "#C57E7D",
+    "primary": "#B90B0B",
+    "secondary": "#B34644"
+  },
+  "crest-d2-10.png": {
+    "accent": "#790102",
+    "primary": "#B1090C",
+    "secondary": "#D1A9A9"
+  },
+  "crest-d2-11.png": {
+    "accent": "#7783A2",
+    "primary": "#3C4C7E",
+    "secondary": "#044086"
+  },
+  "crest-d2-13.png": {
+    "accent": "#5F501B",
+    "primary": "#EAB304",
+    "secondary": "#9B7B1A"
+  },
+  "crest-d2-14.png": {
+    "accent": "#335083",
+    "primary": "#767EA2",
+    "secondary": "#003B84"
+  },
+  "crest-d2-15.png": {
+    "accent": "#6E0303",
+    "primary": "#C30A08",
+    "secondary": "#B73A34"
+  },
+  "crest-d2-16.png": {
+    "accent": "#CC9D3B",
+    "primary": "#E36D04",
+    "secondary": "#F8C141"
+  },
+  "crest-d2-18.png": {
+    "accent": "#57617A",
+    "primary": "#011A42",
+    "secondary": "#323956"
+  },
+  "crest-d2-19.png": {
+    "accent": "#D31B18",
+    "primary": "#F2C4B9",
+    "secondary": "#3E0406"
+  },
+  "crest-d2-20.png": {
+    "accent": "#8E6B3D",
+    "primary": "#04407A",
+    "secondary": "#EBA325"
+  },
+  "crest-d2-21.png": {
+    "accent": "#B77A79",
+    "primary": "#BD0D0D",
+    "secondary": "#B8403E"
+  },
+  "crest-d2-22.png": {
+    "accent": "#00144F",
+    "primary": "#073C7C",
+    "secondary": "#4F597A"
+  },
+  "crest-d2-23.png": {
+    "accent": "#EBCDC6",
+    "primary": "#B40A0A",
+    "secondary": "#BC4F4A"
+  },
+  "crest-d2-24.png": {
+    "accent": "#B0A77D",
+    "primary": "#514A34",
+    "secondary": "#868465"
+  },
+  "crest-pr-01.png": {
+    "accent": "#816030",
+    "primary": "#BB0507",
+    "secondary": "#F7C539"
+  },
+  "crest-pr-02.png": {
+    "accent": "#F6BF2F",
+    "primary": "#ABEBF5",
+    "secondary": "#520F26"
+  },
+  "crest-pr-03.png": {
+    "accent": "#97A571",
+    "primary": "#1C9028",
+    "secondary": "#EC1109"
+  },
+  "crest-pr-04.png": {
+    "accent": "#001200",
+    "primary": "#074E21",
+    "secondary": "#66803A"
+  },
+  "crest-pr-05.png": {
+    "accent": "#9EABC3",
+    "primary": "#063976",
+    "secondary": "#7B89A7"
+  },
+  "crest-pr-06.png": {
+    "accent": "#5B4017",
+    "primary": "#D99020",
+    "secondary": "#FAB834"
+  },
+  "crest-pr-07.png": {
+    "accent": "#7279A5",
+    "primary": "#011C88",
+    "secondary": "#FAEEAB"
+  },
+  "crest-pr-08.png": {
+    "accent": "#E8CC67",
+    "primary": "#4A5E87",
+    "secondary": "#CE2011"
+  },
+  "crest-pr-09.png": {
+    "accent": "#DD130E",
+    "primary": "#4A0D0D",
+    "secondary": "#A50E0A"
+  },
+  "crest-pr-10.png": {
+    "accent": "#EDB40E",
+    "primary": "#CFC4AD",
+    "secondary": "#082143"
+  },
+  "crest-pr-11.png": {
+    "accent": "#E3AC92",
+    "primary": "#AF0A0E",
+    "secondary": "#F4D6B2"
+  },
+  "crest-pr-12.png": {
+    "accent": "#C4DEEA",
+    "primary": "#7DBADE",
+    "secondary": "#277DB9"
+  },
+  "crest-pr-13.png": {
+    "accent": "#F7EB9C",
+    "primary": "#F6C624",
+    "secondary": "#BD0F0E"
+  },
+  "crest-pr-14.png": {
+    "accent": "#E5DB95",
+    "primary": "#471A0B",
+    "secondary": "#738AA3"
+  },
+  "crest-pr-15.png": {
+    "accent": "#A24948",
+    "primary": "#B5090D",
+    "secondary": "#C99190"
+  },
+  "crest-pr-16.png": {
+    "accent": "#CC120F",
+    "primary": "#05122B",
+    "secondary": "#D69A97"
+  },
+  "crest-pr-17.png": {
+    "accent": "#788396",
+    "primary": "#010521",
+    "secondary": "#3D455E"
+  },
+  "crest-pr-18.png": {
+    "accent": "#EBC156",
+    "primary": "#5D1225",
+    "secondary": "#87D2EB"
+  },
+  "crest-pr-19.png": {
+    "accent": "#57411A",
+    "primary": "#E9A625",
+    "secondary": "#FCF5BE"
+  }
+}

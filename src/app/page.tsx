@@ -1,65 +1,110 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { hasSave } from "@/engine/saveEngine";
+
+export default function StartScreen() {
+  const [saveExists, setSaveExists] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void hasSave().then((ok) => {
+      if (cancelled) return;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSaveExists(ok);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-dvh w-full flex items-center justify-center px-4 py-10 relative overflow-hidden bg-[color:var(--ss-bg)]">
+      <BackgroundPitch />
+
+      <div className="relative w-full max-w-3xl">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: "easeOut" }}
+          className="panel overflow-hidden"
+        >
+          <div className="panel-bar text-base sm:text-lg">
+            Gaffer FC · Football Management · Est. 2026
+          </div>
+
+          <div className="bg-[color:var(--ss-row-bench)] text-center px-8 py-10 sm:py-14">
+            <h1 className="h-pixel text-3xl sm:text-5xl crt leading-tight text-white">
+              <span className="block">GAFFER</span>
+              <span className="block text-[color:var(--ss-accent)] mt-3">FC</span>
+            </h1>
+            <p className="mt-6 text-white/90 text-xs sm:text-sm uppercase tracking-[0.18em] font-bold leading-relaxed max-w-md mx-auto">
+              Pick a club. Set tactics.<br />
+              Climb the divisions. Win the cup.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
+            <Link href="/career/new" className="btn btn-stat h-14 text-sm !rounded-none border-0 border-r-0 sm:border-r-2 border-b-2 sm:border-b-0 border-[color:var(--ss-bg-deep)]">
+              ▶ New Career
+            </Link>
+            <Link
+              href={saveExists ? "/dashboard" : "/career/new"}
+              className={`btn h-14 text-sm !rounded-none border-0 ${saveExists ? "btn-info" : "btn-action opacity-50 pointer-events-none"}`}
+              aria-disabled={!saveExists}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+              ⏵ Continue
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-0">
+            <button disabled className="btn btn-action !rounded-none border-0 border-r-2 border-[color:var(--ss-bg-deep)] h-10 text-[10px] opacity-50 cursor-not-allowed">
+              Custom DB · P3
+            </button>
+            <button disabled className="btn btn-action !rounded-none border-0 h-10 text-[10px] opacity-50 cursor-not-allowed">
+              Friend League · Soon
+            </button>
+          </div>
+
+          <div className="ss-strip text-center text-[10px] uppercase tracking-[0.22em] py-2.5 text-[color:var(--ss-cream)]">
+            All clubs, players, badges, kits, stadiums and competitions are fictional.
+          </div>
+        </motion.div>
+
+        <p className="text-center mt-3 text-[10px] uppercase tracking-[0.3em] text-white/70 scoreboard">
+          v0.1 · MVP · Single-Player
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BackgroundPitch() {
+  return (
+    <div aria-hidden className="absolute inset-0 -z-0 opacity-35 pointer-events-none">
+      <svg
+        viewBox="0 0 1200 800"
+        className="w-full h-full"
+        preserveAspectRatio="xMidYMid slice"
+      >
+        <defs>
+          <linearGradient id="bgg" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#1F8B33" />
+            <stop offset="100%" stopColor="#0A1138" />
+          </linearGradient>
+          <pattern id="stripes" width="120" height="800" patternUnits="userSpaceOnUse">
+            <rect width="60" height="800" fill="#166D26" opacity="0.4" />
+          </pattern>
+        </defs>
+        <rect width="1200" height="800" fill="url(#bgg)" />
+        <rect width="1200" height="800" fill="url(#stripes)" />
+        <g stroke="#FFFFFF" strokeOpacity="0.22" strokeWidth="3" fill="none">
+          <rect x="80" y="80" width="1040" height="640" />
+          <line x1="600" y1="80" x2="600" y2="720" />
+          <circle cx="600" cy="400" r="80" />
+          <rect x="80" y="240" width="180" height="320" />
+          <rect x="940" y="240" width="180" height="320" />
+        </g>
+      </svg>
     </div>
   );
 }
