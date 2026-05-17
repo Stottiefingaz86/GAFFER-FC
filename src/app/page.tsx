@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { hasSave } from "@/engine/saveEngine";
@@ -33,10 +34,18 @@ export default function StartScreen() {
           </div>
 
           <div className="bg-[color:var(--ss-row-bench)] text-center px-8 py-10 sm:py-14">
-            <h1 className="h-pixel text-3xl sm:text-5xl crt leading-tight text-white">
-              <span className="block">GAFFER</span>
-              <span className="block text-[color:var(--ss-accent)] mt-3">FC</span>
-            </h1>
+            <h1 className="sr-only">Gaffer FC</h1>
+            <div className="flex justify-center">
+              <Image
+                src="/LOGO_GAFFER.png"
+                alt="Gaffer FC"
+                width={520}
+                height={260}
+                priority
+                className="w-full max-w-[320px] sm:max-w-[440px] h-auto crt select-none"
+                draggable={false}
+              />
+            </div>
             <p className="mt-6 text-white/90 text-xs sm:text-sm uppercase tracking-[0.18em] font-bold leading-relaxed max-w-md mx-auto">
               Pick a club. Set tactics.<br />
               Climb the divisions. Win the cup.
