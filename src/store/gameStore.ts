@@ -66,6 +66,17 @@ import {
   generateScoutMarket,
   runWeeklyScouting,
 } from "@/engine/scoutingEngine";
+import { runWeeklyTransfers } from "@/engine/transferEngine";
+import {
+  defaultFreeAgentTerms,
+  defaultRenewalTerms,
+  evaluateFreeAgentOffer,
+  evaluateRenewalOffer,
+  postTransferContract,
+  roundMoney,
+  type ContractTerms,
+  type NegotiationResponse,
+} from "@/engine/contractEngine";
 import { FREE_AGENT_CLUB_ID } from "@/generators/playerGenerator";
 import {
   clampPitchCoord,
@@ -123,6 +134,60 @@ interface GameStoreApi extends GameState {
    * club. Returns true on success, false if the budget can't cover it
    * or anything else is wrong. */
   completeTransfer: (playerId: string, amount: number) => boolean;
+
+  // ── Phase-2 contracts & free-agent signing ─────────────────────────
+  /** Default contract terms a player would expect for a free-agent
+   *  signing or a renewal. The UI pre-fills its sliders with this. */
+  defaultFreeAgentTermsFor: (
+    playerId: string,
+  ) => import("@/engine/contractEngine").ContractTerms | null;
+  defaultRenewalTermsFor: (
+    playerId: string,
+  ) => import("@/engine/contractEngine").ContractTerms | null;
+  /** Submits a contract offer to a free-agent player. The player runs
+   *  it through the contract engine and returns an accept/counter/reject
+   *  response. On accept, the player joins the user's club and the
+   *  signing fee is debited. */
+  signFreeAgent: (
+    playerId: string,
+    terms: import("@/engine/contractEngine").ContractTerms,
+  ) => {
+    ok: boolean;
+    reason?: "insufficient" | "not_free_agent" | "unknown" | "rejected" | "countered";
+    response?: import("@/engine/contractEngine").NegotiationResponse;
+  };
+  /** Submits a contract renewal to one of the user's own players. */
+  renewContract: (
+    playerId: string,
+    terms: import("@/engine/contractEngine").ContractTerms,
+  ) => {
+    ok: boolean;
+    reason?: "not_own_player" | "unknown" | "rejected" | "countered";
+    response?: import("@/engine/contractEngine").NegotiationResponse;
+  };
+  /** Lists one of the user's own players for sale at `askingPrice`.
+   *  AI rivals will start lodging bids over the next few weeks. */
+  listPlayerForSale: (playerId: string, askingPrice: number) => void;
+  /** Removes a player from the transfer list. Pending offers stay
+   *  pending — clubs that already bid don't withdraw automatically. */
+  unlistPlayerForSale: (playerId: string) => void;
+  /** Releases one of your own players, terminating their contract.
+   *  You pay severance equal to half the remaining wage commitment. */
+  releasePlayer: (playerId: string) => { ok: boolean; severance: number };
+
+  /** Accepts a pending transfer offer from a rival club. Player leaves
+   *  for the bidding club, the user's budget is credited the offer
+   *  amount, and any other pending offers for that player are dropped. */
+  acceptTransferOffer: (offerId: string) => { ok: boolean };
+  /** Rejects a pending offer outright. */
+  rejectTransferOffer: (offerId: string) => void;
+  /** Counters a pending offer at `counterAmount`. The rival evaluates
+   *  the counter and either accepts (creating a new pending offer at
+   *  the counter amount) or walks away. */
+  counterTransferOffer: (offerId: string, counterAmount: number) => {
+    ok: boolean;
+    accepted?: boolean;
+  };
 
   // Scouting — opponents and free agents start fogged. Marking a
   // player as scouted unlocks their detailed stats in profiles,
@@ -1081,6 +1146,25 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       }
     }
 
+    // ===== Weekly transfers — AI rivals bid on user's players =====
+    // Transfer-listed players + high-interest stars attract bids from
+    // rival clubs that we credibly match by reputation. Offers land in
+    // career.pendingOffers and as inbox digests under category Transfer.
+    {
+      const txfrTick = runWeeklyTransfers({
+        career: nextCareer,
+        db: nextDb,
+        rng: createRng(`${career.id}_txfr_w${week}`),
+      });
+      nextCareer = {
+        ...nextCareer,
+        pendingOffers: txfrTick.nextOffers,
+      };
+      if (txfrTick.inboxMessages.length > 0) {
+        nextDb.inbox = [...txfrTick.inboxMessages, ...nextDb.inbox];
+      }
+    }
+
     // ===== Continental cup round progression =====
     // Champions Cup + Continental Cup are 8-team single-leg knockouts.
     // Round 1 fixtures get dropped into db.fixtures during the season
@@ -1631,7 +1715,20 @@ export const useGame = create<GameStoreApi>((set, get) => ({
 
     const nextBuyer: Club = { ...buyer, budget: buyer.budget - amount };
     const nextSeller: Club = { ...seller, budget: seller.budget + amount };
-    const nextPlayer: Player = { ...player, clubId: buyer.id };
+    // Post-transfer contract — assign a fresh wage + length so the
+    // budget panels stay coherent (otherwise the player keeps his old
+    // club's wage forever and finance balance breaks).
+    const newContract = postTransferContract(player, nextBuyer);
+    const nextPlayer: Player = {
+      ...player,
+      clubId: buyer.id,
+      wage: newContract.weeklyWage,
+      contractYears: newContract.contractYears,
+      // Clear any "for sale" state from the seller-side flags and any
+      // pending offers tracking — those don't follow the player.
+      transferListed: false,
+      askingPrice: undefined,
+    };
 
     // Add the new player to the buyer's bench tail (or leave him out
     // entirely if there's no lineup yet — he'll show up in reserves).
@@ -1663,6 +1760,385 @@ export const useGame = create<GameStoreApi>((set, get) => ({
     void flushSave();
     void saveGame(career, nextDb);
     return true;
+  },
+
+  // ──────────────────────────────────────────────────────────────────
+  // Phase-2 contracts & free-agent signing
+  // ──────────────────────────────────────────────────────────────────
+
+  defaultFreeAgentTermsFor: (playerId) => {
+    const { db } = get();
+    if (!db) return null;
+    const player = db.players[playerId];
+    if (!player) return null;
+    return defaultFreeAgentTerms(player);
+  },
+
+  defaultRenewalTermsFor: (playerId) => {
+    const { db } = get();
+    if (!db) return null;
+    const player = db.players[playerId];
+    if (!player) return null;
+    return defaultRenewalTerms(player);
+  },
+
+  signFreeAgent: (playerId, terms) => {
+    const { db, career } = get();
+    if (!db || !career) return { ok: false, reason: "unknown" };
+    const player = db.players[playerId];
+    if (!player) return { ok: false, reason: "unknown" };
+    if (player.clubId !== FREE_AGENT_CLUB_ID) {
+      return { ok: false, reason: "not_free_agent" };
+    }
+    const buyer = db.clubs[career.selectedClubId];
+    if (!buyer) return { ok: false, reason: "unknown" };
+    if (buyer.budget < terms.signingFee) {
+      return { ok: false, reason: "insufficient" };
+    }
+
+    // Run the negotiation through the contract engine.
+    const response: NegotiationResponse = evaluateFreeAgentOffer(player, terms);
+    if (response.decision === "reject") {
+      return { ok: false, reason: "rejected", response };
+    }
+    if (response.decision === "counter") {
+      return { ok: false, reason: "countered", response };
+    }
+
+    // Accept — debit signing fee, move player to user's club, reset
+    // contract terms to the agreed offer. The user's lineup gets a new
+    // bench addition automatically (same logic as completeTransfer).
+    const nextBuyer: Club = { ...buyer, budget: buyer.budget - terms.signingFee };
+    const nextPlayer: Player = {
+      ...player,
+      clubId: buyer.id,
+      wage: terms.weeklyWage,
+      contractYears: terms.contractYears,
+      transferListed: false,
+      askingPrice: undefined,
+    };
+
+    const buyerLineup = db.lineups[buyer.id];
+    let nextLineups = db.lineups;
+    if (
+      buyerLineup &&
+      !buyerLineup.bench.includes(playerId) &&
+      !Object.values(buyerLineup.starters).includes(playerId)
+    ) {
+      const room = 6;
+      const updatedLineup: Lineup = {
+        ...buyerLineup,
+        bench:
+          buyerLineup.bench.length < room
+            ? [...buyerLineup.bench, playerId]
+            : buyerLineup.bench,
+      };
+      nextLineups = { ...db.lineups, [buyer.id]: updatedLineup };
+    }
+
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: { ...db.clubs, [buyer.id]: nextBuyer },
+      players: { ...db.players, [playerId]: nextPlayer },
+      lineups: nextLineups,
+    };
+    set({ db: nextDb });
+    void flushSave();
+    void saveGame(career, nextDb);
+    return { ok: true, response };
+  },
+
+  renewContract: (playerId, terms) => {
+    const { db, career } = get();
+    if (!db || !career) return { ok: false, reason: "unknown" };
+    const player = db.players[playerId];
+    if (!player) return { ok: false, reason: "unknown" };
+    if (player.clubId !== career.selectedClubId) {
+      return { ok: false, reason: "not_own_player" };
+    }
+
+    const response = evaluateRenewalOffer(player, terms);
+    if (response.decision === "reject") {
+      return { ok: false, reason: "rejected", response };
+    }
+    if (response.decision === "counter") {
+      return { ok: false, reason: "countered", response };
+    }
+
+    // Accept — apply new wage + contractYears. Renewals don't move the
+    // player (they're already on the club) and they don't pay a
+    // signing fee (we tell the engine renewals get fee=0).
+    const nextPlayer: Player = {
+      ...player,
+      wage: terms.weeklyWage,
+      contractYears: terms.contractYears,
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      players: { ...db.players, [playerId]: nextPlayer },
+    };
+
+    const nextCareer: Career = {
+      ...career,
+      updatedAt: new Date().toISOString(),
+    };
+    set({ db: nextDb, career: nextCareer });
+    void flushSave();
+    void saveGame(nextCareer, nextDb);
+    return { ok: true, response };
+  },
+
+  listPlayerForSale: (playerId, askingPrice) => {
+    const { db, career } = get();
+    if (!db || !career) return;
+    const player = db.players[playerId];
+    if (!player) return;
+    if (player.clubId !== career.selectedClubId) return;
+    const nextPlayer: Player = {
+      ...player,
+      transferListed: true,
+      askingPrice: roundMoney(askingPrice),
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      players: { ...db.players, [playerId]: nextPlayer },
+    };
+    set({ db: nextDb });
+    scheduleSave(career, nextDb);
+  },
+
+  unlistPlayerForSale: (playerId) => {
+    const { db, career } = get();
+    if (!db || !career) return;
+    const player = db.players[playerId];
+    if (!player) return;
+    if (player.clubId !== career.selectedClubId) return;
+    const nextPlayer: Player = {
+      ...player,
+      transferListed: false,
+      askingPrice: undefined,
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      players: { ...db.players, [playerId]: nextPlayer },
+    };
+    set({ db: nextDb });
+    scheduleSave(career, nextDb);
+  },
+
+  releasePlayer: (playerId) => {
+    const { db, career } = get();
+    if (!db || !career) return { ok: false, severance: 0 };
+    const player = db.players[playerId];
+    if (!player) return { ok: false, severance: 0 };
+    if (player.clubId !== career.selectedClubId) {
+      return { ok: false, severance: 0 };
+    }
+    const userClub = db.clubs[career.selectedClubId];
+    if (!userClub) return { ok: false, severance: 0 };
+
+    // Severance — half the remaining wage commitment, capped at 26
+    // weeks per remaining contract year so a 5-year deal isn't
+    // ruinously expensive to escape.
+    const weeksRemaining = Math.min(26, 52) * Math.max(1, player.contractYears);
+    const severance = Math.round((player.wage * weeksRemaining) / 2);
+    if (userClub.budget < severance) {
+      return { ok: false, severance };
+    }
+
+    // Player → free agent, club budget docked, lineup cleaned up.
+    const nextPlayer: Player = {
+      ...player,
+      clubId: FREE_AGENT_CLUB_ID,
+      wage: 0,
+      contractYears: 0,
+      transferListed: false,
+      askingPrice: undefined,
+    };
+    const nextClub: Club = { ...userClub, budget: userClub.budget - severance };
+
+    const userLineup = db.lineups[userClub.id];
+    let nextLineups = db.lineups;
+    if (userLineup) {
+      const startingSlots = Object.entries(userLineup.starters);
+      const cleanedStarters = Object.fromEntries(
+        startingSlots.map(([slot, id]) => [slot, id === playerId ? "" : id]),
+      );
+      nextLineups = {
+        ...db.lineups,
+        [userClub.id]: {
+          ...userLineup,
+          starters: cleanedStarters,
+          bench: userLineup.bench.filter((id) => id !== playerId),
+          captainId:
+            userLineup.captainId === playerId ? null : userLineup.captainId,
+        },
+      };
+    }
+
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: { ...db.clubs, [userClub.id]: nextClub },
+      players: { ...db.players, [playerId]: nextPlayer },
+      lineups: nextLineups,
+    };
+    set({ db: nextDb });
+    void flushSave();
+    void saveGame(career, nextDb);
+    return { ok: true, severance };
+  },
+
+  acceptTransferOffer: (offerId) => {
+    const { db, career } = get();
+    if (!db || !career) return { ok: false };
+    const offers = career.pendingOffers ?? [];
+    const offer = offers.find((o) => o.id === offerId);
+    if (!offer || offer.status !== "pending") return { ok: false };
+    const player = db.players[offer.playerId];
+    const buyer = db.clubs[offer.fromClubId];
+    const seller = db.clubs[career.selectedClubId];
+    if (!player || !buyer || !seller) return { ok: false };
+
+    // Move budget seller→...wait, the user IS the seller in this flow.
+    // Player leaves the user's club; the user receives the offer £.
+    const nextSeller: Club = { ...seller, budget: seller.budget + offer.amount };
+    const nextBuyer: Club = { ...buyer, budget: Math.max(0, buyer.budget - offer.amount) };
+    // New contract for the joining club.
+    const newContract = postTransferContract(player, buyer);
+    const nextPlayer: Player = {
+      ...player,
+      clubId: buyer.id,
+      wage: newContract.weeklyWage,
+      contractYears: newContract.contractYears,
+      transferListed: false,
+      askingPrice: undefined,
+    };
+
+    // Clean up the user's lineup — the player is gone.
+    const userLineup = db.lineups[seller.id];
+    let nextLineups = db.lineups;
+    if (userLineup) {
+      const cleanedStarters = Object.fromEntries(
+        Object.entries(userLineup.starters).map(([slot, id]) => [
+          slot,
+          id === offer.playerId ? "" : id,
+        ]),
+      );
+      nextLineups = {
+        ...db.lineups,
+        [seller.id]: {
+          ...userLineup,
+          starters: cleanedStarters,
+          bench: userLineup.bench.filter((id) => id !== offer.playerId),
+          captainId:
+            userLineup.captainId === offer.playerId
+              ? null
+              : userLineup.captainId,
+        },
+      };
+    }
+
+    // Drop every other pending offer for this player — they're gone.
+    const nextOffers = offers
+      .filter((o) => o.playerId !== offer.playerId)
+      .concat([{ ...offer, status: "accepted" }]);
+
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: {
+        ...db.clubs,
+        [seller.id]: nextSeller,
+        [buyer.id]: nextBuyer,
+      },
+      players: { ...db.players, [offer.playerId]: nextPlayer },
+      lineups: nextLineups,
+    };
+    const nextCareer: Career = {
+      ...career,
+      pendingOffers: nextOffers,
+      updatedAt: new Date().toISOString(),
+    };
+    set({ db: nextDb, career: nextCareer });
+    void flushSave();
+    void saveGame(nextCareer, nextDb);
+    return { ok: true };
+  },
+
+  rejectTransferOffer: (offerId) => {
+    const { career, db } = get();
+    if (!career || !db) return;
+    const offers = career.pendingOffers ?? [];
+    const next = offers.map((o) =>
+      o.id === offerId ? { ...o, status: "rejected" as const } : o,
+    );
+    const nextCareer: Career = {
+      ...career,
+      pendingOffers: next,
+      updatedAt: new Date().toISOString(),
+    };
+    set({ career: nextCareer });
+    scheduleSave(nextCareer, db);
+  },
+
+  counterTransferOffer: (offerId, counterAmount) => {
+    const { career, db } = get();
+    if (!career || !db) return { ok: false };
+    const offers = career.pendingOffers ?? [];
+    const offer = offers.find((o) => o.id === offerId);
+    if (!offer || offer.status !== "pending") return { ok: false };
+    const player = db.players[offer.playerId];
+    const buyer = db.clubs[offer.fromClubId];
+    const seller = db.clubs[career.selectedClubId];
+    if (!player || !buyer || !seller) return { ok: false };
+
+    // Re-use the buy-side bid engine to evaluate the counter from the
+    // *buyer's* perspective. If the buyer's "asking" gate accepts the
+    // counter, we replace the pending offer with one at the counter
+    // amount; otherwise the offer is dead.
+    const ctx = { player, seller, buyer, amount: counterAmount };
+    const response = evaluateBid(ctx);
+    if (response.status === "accepted") {
+      // Buyer agrees to the counter — bump the offer to the new amount,
+      // mark countered so the user can re-accept this round (the
+      // higher amount).
+      const nextOffers = offers.map((o) =>
+        o.id === offerId
+          ? {
+              ...o,
+              amount: counterAmount,
+              counterAmount: undefined,
+              status: "pending" as const,
+            }
+          : o,
+      );
+      const nextCareer: Career = {
+        ...career,
+        pendingOffers: nextOffers,
+        updatedAt: new Date().toISOString(),
+      };
+      set({ career: nextCareer });
+      scheduleSave(nextCareer, db);
+      return { ok: true, accepted: true };
+    }
+
+    // Counter rejected — buyer walks away.
+    const nextOffers = offers.map((o) =>
+      o.id === offerId
+        ? {
+            ...o,
+            status: "rejected" as const,
+            counterAmount,
+          }
+        : o,
+    );
+    const nextCareer: Career = {
+      ...career,
+      pendingOffers: nextOffers,
+      updatedAt: new Date().toISOString(),
+    };
+    set({ career: nextCareer });
+    scheduleSave(nextCareer, db);
+    return { ok: true, accepted: false };
   },
 
   scoutPlayers: (playerIds) => {

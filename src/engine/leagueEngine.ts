@@ -367,10 +367,22 @@ export function runSeasonRollover(
       99,
     );
 
+    // Decrement contract — players run a year off their deal each
+    // season. When a contract hits 0 they become a free agent (clubId
+    // → FREE_AGENT_CLUB_ID, wage → 0). The user's renew-contract
+    // negotiation is the only way to extend before this happens.
+    const nextContractYears = Math.max(0, (p.contractYears ?? 1) - 1);
+    const expired = nextContractYears === 0;
+
     next[p.id] = stampValue({
       ...p,
       age: nextAge,
       overall: newOverall,
+      contractYears: expired ? 0 : nextContractYears,
+      clubId: expired ? FREE_AGENT_CLUB_ID : p.clubId,
+      wage: expired ? 0 : p.wage,
+      transferListed: expired ? false : p.transferListed,
+      askingPrice: expired ? undefined : p.askingPrice,
       // Per-season counters reset so last-year's hot run doesn't keep
       // colouring the value calculation forever.
       goals: 0,

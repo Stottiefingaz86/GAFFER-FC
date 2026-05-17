@@ -6,6 +6,7 @@ import { AppShell } from "@/components/game/AppShell";
 import { Flag } from "@/components/game/Flag";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { PlayerProfile } from "@/components/game/PlayerProfile";
+import { ContractModal } from "@/components/game/ContractModal";
 import { TeamCrest } from "@/components/game/TeamCrest";
 import { toast } from "@/components/game/Toaster";
 import { useGame } from "@/store/gameStore";
@@ -70,6 +71,9 @@ function ScoutingInner() {
   const [sort, setSort] = useState<SortKey>("Potential");
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+  // When the user clicks Sign on a free-agent profile we swap to the
+  // contract negotiation modal — same player, different surface.
+  const [signId, setSignId] = useState<string | null>(null);
 
   // Resolve the user's watchlist into actual player records. We exclude
   // the user's own players (those don't need a watchlist — they're
@@ -473,11 +477,27 @@ function ScoutingInner() {
                 primaryColor={userClub?.badge.primaryColor}
                 secondaryColor={userClub?.badge.secondaryColor}
                 onClose={() => setOpenId(null)}
+                onSign={
+                  open.clubId === FREE_AGENT_CLUB_ID
+                    ? () => {
+                        setSignId(open.id);
+                        setOpenId(null);
+                      }
+                    : undefined
+                }
               />
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {signId && db?.players[signId] && (
+        <ContractModal
+          player={db.players[signId]}
+          mode="sign"
+          onClose={() => setSignId(null)}
+        />
+      )}
     </div>
   );
 }

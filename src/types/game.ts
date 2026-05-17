@@ -290,6 +290,16 @@ export interface Player {
   /** Other clubs sniffing around. Generated on creation; updated when
    * form/age/value shifts make a player more or less attractive. */
   transferInterest: TransferInterest[];
+
+  /** TRUE when the user has listed this player for sale on the squad
+   *  page. AI rivals still bid for non-listed stars but listing
+   *  signals "we'll entertain offers" so bids come in faster + at
+   *  better prices. Optional — old saves treat undefined as false. */
+  transferListed?: boolean;
+  /** Asking price set by the user when listing for sale. AI rival
+   *  clubs use this as an anchor — they'll happily counter below it
+   *  but won't pay over without a bidding war. Optional. */
+  askingPrice?: number;
 }
 
 /** Periodic snapshot of a player's headline numbers. The current values
@@ -1021,6 +1031,37 @@ export interface Career {
    * this field is non-null the AppShell redirects every nav click to
    * /season/end so the user has to acknowledge their season. */
   pendingSeasonReport?: SeasonReport | null;
+
+  /** Incoming transfer offers from rival AI clubs for the user's own
+   *  players. Generated weekly by `runWeeklyTransfers` — surfaces
+   *  through the inbox and the new Transfers screen. Each offer
+   *  expires a few weeks after submission so the user can't sit on
+   *  them forever. Optional — older saves default to []. */
+  pendingOffers?: TransferOffer[];
+}
+
+/** A bid from a rival AI club for one of the user's players. Lives on
+ *  Career.pendingOffers and is also surfaced as an InboxMessage with
+ *  category "Transfer" so it's visible from anywhere in the app. */
+export interface TransferOffer {
+  id: string;
+  /** The bidding rival club. */
+  fromClubId: string;
+  /** The user's player they want. */
+  playerId: string;
+  /** The offered fee. */
+  amount: number;
+  /** Week the offer was made. */
+  week: number;
+  season: number;
+  /** Week the offer auto-expires (typically `week + 4`). */
+  expiresWeek: number;
+  /** Status — pending until accepted/rejected/expired/countered. */
+  status: "pending" | "accepted" | "rejected" | "expired" | "countered";
+  /** When countered, the user's counter-asking-price. The AI rival
+   *  evaluates this and either accepts (becomes a new offer at this
+   *  amount) or walks away. */
+  counterAmount?: number;
 }
 
 // =====================================================================

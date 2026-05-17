@@ -6,6 +6,7 @@ import { AnimatedBar } from "@/components/game/AnimatedBar";
 import { Flag } from "@/components/game/Flag";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { PlayerProfile } from "@/components/game/PlayerProfile";
+import { ContractModal } from "@/components/game/ContractModal";
 import { useGame } from "@/store/gameStore";
 import type { Position } from "@/types/game";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,6 +33,15 @@ function SquadInner() {
   const career = useGame((s) => s.career);
   const [filter, setFilter] = useState<FilterKey>("All");
   const [openId, setOpenId] = useState<string | null>(null);
+  // Contract / transfer modal — opens with one of three modes when the
+  // user clicks Renew, List for Sale, or (free agents) Sign on the
+  // player profile.
+  const [contractModal, setContractModal] = useState<
+    { playerId: string; mode: "sign" | "renew" | "list" } | null
+  >(null);
+  const contractPlayer = useGame((s) =>
+    contractModal ? s.db?.players[contractModal.playerId] ?? null : null,
+  );
 
   const filtered = useMemo(() => {
     return players
@@ -150,11 +160,17 @@ function SquadInner() {
                       <span>{p.displayName}</span>
                       {p.isSuspended && <span className="bg-[color:var(--ss-warning)] text-black text-[9px] px-1">SUS</span>}
                       {p.isInjured && <span className="bg-black text-white text-[9px] px-1">INJ {p.injuryWeeks}w</span>}
+                      {p.transferListed && <span className="bg-[color:var(--ss-accent)] text-black text-[9px] px-1">LISTED</span>}
+                      {p.contractYears <= 1 && (
+                        <span className="bg-red-600 text-white text-[9px] px-1" title="Contract expires this season — renew before he runs free!">
+                          {p.contractYears === 0 ? "EXPIRED" : "EXP"}
+                        </span>
+                      )}
                     </span>
                     <span className="text-[9px] tracking-[0.16em] opacity-80 truncate flex items-center gap-1">
                       <Flag nationalityId={p.nationality} width={14} />
                       <span className="truncate">
-                        {p.age}Y · {p.preferredFoot.charAt(0)} · {p.trait}
+                        {p.age}Y · {p.preferredFoot.charAt(0)} · {p.trait} · {p.contractYears}y
                       </span>
                     </span>
                   </span>
@@ -205,11 +221,27 @@ function SquadInner() {
                 secondaryColor={userClub?.badge.secondaryColor}
                 ownPlayer
                 onClose={() => setOpenId(null)}
+                onNewContract={() => {
+                  setContractModal({ playerId: open.id, mode: "renew" });
+                  setOpenId(null);
+                }}
+                onSell={() => {
+                  setContractModal({ playerId: open.id, mode: "list" });
+                  setOpenId(null);
+                }}
               />
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {contractModal && contractPlayer && (
+        <ContractModal
+          player={contractPlayer}
+          mode={contractModal.mode}
+          onClose={() => setContractModal(null)}
+        />
+      )}
     </div>
   );
 }

@@ -34,6 +34,8 @@ import {
   suggestStartingBid,
   type BidResponse,
 } from "@/engine/bidEngine";
+import { ContractModal } from "@/components/game/ContractModal";
+import { FREE_AGENT_CLUB_ID } from "@/generators/playerGenerator";
 
 export default function BidPage({
   params,
@@ -75,6 +77,20 @@ function BidInner({ playerId }: { playerId: string }) {
 
   // ---- Guards ----
   if (!db || !career) return null;
+
+  // Free agents don't have a selling club — they sign directly via the
+  // contract negotiation modal. Render that here so links to /bid/[id]
+  // still work for them, instead of falling through to "Player Not Found".
+  if (player && player.clubId === FREE_AGENT_CLUB_ID) {
+    return (
+      <ContractModal
+        player={player}
+        mode="sign"
+        onClose={() => router.push("/scouting")}
+      />
+    );
+  }
+
   if (!player || !seller || !buyer) {
     return (
       <div className="panel overflow-hidden">
