@@ -9,6 +9,7 @@ import { PlayerLink } from "@/components/game/PlayerLink";
 import { useGame } from "@/store/gameStore";
 import { NATIONS, REGIONS, divisionTierFor, NATION_IDS } from "@/data/nations";
 import { NationFlag } from "@/components/game/NationFlag";
+import { playersByClub } from "@/lib/dbIndex";
 import type { Club, Nation, NationRegion, Player } from "@/types/game";
 
 export default function LeaguePage() {
@@ -366,8 +367,15 @@ function LeagueStatsPanel({
   // because the table is the canonical source of "who's in the
   // league this season" (handles promotion/relegation correctly).
   const stats = useMemo(() => {
-    const clubIds = new Set(db.tables[divisionId]?.rows.map((r) => r.clubId) ?? []);
-    const players = Object.values(db.players).filter((p) => clubIds.has(p.clubId));
+    const clubIds = db.tables[divisionId]?.rows.map((r) => r.clubId) ?? [];
+    // Pull each club's squad from the indexed map (O(clubs) instead
+    // of O(all-players-in-world)).
+    const players: Player[] = [];
+    const byClub = playersByClub(db.players);
+    for (const cid of clubIds) {
+      const list = byClub.get(cid);
+      if (list) players.push(...list);
+    }
 
     const byTotal = (key: "goals" | "assists" | "yellowCards" | "redCards") =>
       [...players]

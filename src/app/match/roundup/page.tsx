@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { AppShell } from "@/components/game/AppShell";
 import { TeamCrest } from "@/components/game/TeamCrest";
@@ -14,7 +14,8 @@ import {
   type MatchDay,
 } from "@/types/game";
 import { COMP_IDS } from "@/data/competitionSeeds";
-import { isLeagueCompetitionId } from "@/data/nations";
+import { isLeagueCompetitionId, nationOfCompetition } from "@/data/nations";
+import { fixturesForWeek } from "@/lib/dbIndex";
 
 /** Display order so we always render Prem → D1 → D2 → D3 → cups within a day. */
 const COMP_ORDER: string[] = [
@@ -44,6 +45,8 @@ export default function MatchRoundupPage() {
   );
 }
 
+type ScopeFilter = "league" | "nation" | "all";
+
 function RoundupInner() {
   const db = useGame((s) => s.db)!;
   const career = useGame((s) => s.career)!;
@@ -53,14 +56,54 @@ function RoundupInner() {
   // career.week after simulating).
   const lastWeek = Math.max(career.week - 1, 1);
 
-  const playedThisWeek = useMemo(
-    () => db.fixtures.filter((f) => f.played && f.result && f.week === lastWeek),
-    [db.fixtures, lastWeek]
+  // With 15 nations × 4 divisions playing every week, the round-up
+  // can render 100+ fixtures across 6 competitions PER DAY. That's
+  // crippling to render and overwhelming to read. Default to the
+  // user's own league only; let them widen to their nation (all
+  // domestic comps) or the whole world if they want.
+  const [scope, setScope] = useState<ScopeFilter>("league");
+
+  const userNationId = useMemo(
+    () => nationOfCompetition(userClub.divisionId) ?? "england",
+    [userClub.divisionId],
   );
 
-  const userFx = playedThisWeek.find(
-    (f) => f.homeId === userClub.id || f.awayId === userClub.id
+  // All fixtures played this week — indexed so we don't scan the
+  // full season-long fixture list every render.
+  const allPlayedThisWeek = useMemo(
+    () => fixturesForWeek(db.fixtures, lastWeek).filter((f) => f.played && f.result),
+    [db.fixtures, lastWeek],
   );
+
+  // Filter to scope. We always keep the user's own match visible so
+  // the "Your Match" strip never disappears regardless of filter.
+  const playedThisWeek = useMemo(() => {
+    if (scope === "all") return allPlayedThisWeek;
+    if (scope === "nation") {
+      return allPlayedThisWeek.filter(
+        (f) => nationOfCompetition(f.competitionId) === userNationId,
+      );
+    }
+    // "league" — only fixtures from the user's own division.
+    return allPlayedThisWeek.filter((f) => f.competitionId === userClub.divisionId);
+  }, [allPlayedThisWeek, scope, userClub.divisionId, userNationId]);
+
+  // The user's match is always extracted from the FULL list so the
+  // "Your Match" strip always shows (even when scope hides it).
+  const userFx = allPlayedThisWeek.find(
+    (f) => f.homeId === userClub.id || f.awayId === userClub.id,
+  );
+
+  // Counts for the filter tabs — so the user can see how much wider
+  // the next scope would go before opting in.
+  const counts = useMemo(() => {
+    const all = allPlayedThisWeek.length;
+    const nation = allPlayedThisWeek.filter(
+      (f) => nationOfCompetition(f.competitionId) === userNationId,
+    ).length;
+    const league = allPlayedThisWeek.filter((f) => f.competitionId === userClub.divisionId).length;
+    return { all, nation, league };
+  }, [allPlayedThisWeek, userNationId, userClub.divisionId]);
 
   // Group: day -> competition -> fixtures[]
   const grouped = useMemo(() => {
@@ -81,7 +124,10 @@ function RoundupInner() {
 
   const usedDays = MATCHDAY_ORDER.filter((d) => grouped.has(d));
 
-  if (playedThisWeek.length === 0) {
+  // Edge case: scope filter could legitimately match zero (e.g. user's
+  // league had a cup week off). Show a friendlier empty state with
+  // the filter tabs still visible so they can widen the scope.
+  if (allPlayedThisWeek.length === 0) {
     return (
       <div className="panel overflow-hidden max-w-2xl mx-auto">
         <div className="panel-bar text-base">No Results Yet</div>
@@ -95,7 +141,8 @@ function RoundupInner() {
     );
   }
 
-  // Headline numbers across the round.
+  // Headline numbers — always computed off the FILTERED list so the
+  // numbers match what the user sees below.
   const totalGoals = playedThisWeek.reduce(
     (acc, f) => acc + (f.result?.homeGoals ?? 0) + (f.result?.awayGoals ?? 0),
     0
@@ -141,7 +188,8 @@ function RoundupInner() {
         )}
       </motion.section>
 
-      {/* User's match — first, in the team-tinted strip */}
+      {/* User's match — first, in the team-tinted strip. Pulled from
+          the full week regardless of filter so it never disappears. */}
       {userFx && userFx.result && (
         <motion.section
           className="panel overflow-hidden"
@@ -151,6 +199,40 @@ function RoundupInner() {
           <div className="panel-bar text-sm">Your Match</div>
           <UserResultStrip fx={userFx} userClubId={userClub.id} />
         </motion.section>
+      )}
+
+      {/* Scope filter — defaults to user's league so the page isn't a
+          firehose of every match in every nation. Counts in parens
+          tell the user how much more is waiting if they widen. */}
+      <div className="panel overflow-hidden">
+        <div className="grid grid-cols-3">
+          <ScopeTab
+            active={scope === "league"}
+            count={counts.league}
+            label="My League"
+            onClick={() => setScope("league")}
+          />
+          <ScopeTab
+            active={scope === "nation"}
+            count={counts.nation}
+            label="My Nation"
+            onClick={() => setScope("nation")}
+          />
+          <ScopeTab
+            active={scope === "all"}
+            count={counts.all}
+            label="Worldwide"
+            onClick={() => setScope("all")}
+          />
+        </div>
+      </div>
+
+      {playedThisWeek.length === 0 && (
+        <div className="panel overflow-hidden">
+          <div className="bg-[color:var(--ss-bg-2)] py-6 text-center text-[color:var(--muted)] text-xs uppercase tracking-[0.16em]">
+            No fixtures in this scope this week — try My Nation or Worldwide.
+          </div>
+        </div>
       )}
 
       {/* Per-day blocks */}
@@ -219,6 +301,33 @@ function RoundupInner() {
         )}
       </div>
     </div>
+  );
+}
+
+function ScopeTab({
+  active, label, count, onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-2.5 text-[11px] uppercase tracking-[0.18em] font-extrabold",
+        "border-r border-[color:var(--ss-bar-edge)] last:border-r-0 transition-colors",
+        active
+          ? "bg-[color:var(--ss-accent)] text-[color:var(--ss-bg-deep)]"
+          : "bg-[color:var(--ss-bar-2)] text-[color:var(--ss-bar-text)] hover:bg-[color:var(--ss-bg-3)]",
+      ].join(" ")}
+    >
+      <span>{label}</span>
+      <span className={active ? "opacity-70 ml-1.5" : "opacity-60 ml-1.5"}>
+        ({count})
+      </span>
+    </button>
   );
 }
 

@@ -14,6 +14,7 @@ import { toast } from "@/components/game/Toaster";
 import { useGame } from "@/store/gameStore";
 import { DIVISION_NAMES } from "@/data/competitionSeeds";
 import { divisionTierFor, nationOfCompetition } from "@/data/nations";
+import { fixturesForClub, playersForClub } from "@/lib/dbIndex";
 import { readableOn } from "@/lib/color";
 import { formatValue, formatWage } from "@/lib/playerValue";
 import { competitionLabel } from "@/engine/historyEngine";
@@ -73,16 +74,17 @@ function ClubViewInner({ clubId }: { clubId: string }) {
 
   // All hooks must run unconditionally — the "not found" branch happens
   // *after* every hook below has been called.
+  // Indexed lookups — `playersForClub` / `fixturesForClub` use a
+  // WeakMap cache keyed by db.players / db.fixtures so opening the
+  // 80th club this session is just as fast as opening the first one.
+  // Before this we filtered 30,000+ players linearly every render.
   const squad = useMemo<Player[]>(
-    () => Object.values(db.players).filter((p) => p.clubId === clubId),
+    () => playersForClub(db.players, clubId),
     [db.players, clubId],
   );
 
   const allFixtures = useMemo(
-    () =>
-      db.fixtures
-        .filter((f) => f.homeId === clubId || f.awayId === clubId)
-        .sort((a, b) => a.week - b.week),
+    () => fixturesForClub(db.fixtures, clubId),
     [db.fixtures, clubId],
   );
 
@@ -90,8 +92,7 @@ function ClubViewInner({ clubId }: { clubId: string }) {
   // sees "Royal Albion want your striker".
   const wantsFromUs: Player[] = useMemo(() => {
     if (!userClub || userClub.id === clubId) return [];
-    return Object.values(db.players)
-      .filter((p) => p.clubId === userClub.id)
+    return playersForClub(db.players, userClub.id)
       .filter((p) => (p.transferInterest ?? []).some((t) => t.clubId === clubId))
       .sort((a, b) => b.overall - a.overall);
   }, [db.players, userClub, clubId]);

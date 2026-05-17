@@ -11,6 +11,7 @@ import { motion } from "framer-motion";
 import { formatValue } from "@/lib/playerValue";
 import type { Club, Fixture, GameDatabase } from "@/types/game";
 import { isLeagueCompetitionId } from "@/data/nations";
+import { playersForClub } from "@/lib/dbIndex";
 
 export default function DashboardPage() {
   return (
@@ -24,7 +25,8 @@ function DashboardInner() {
   const career = useGame((s) => s.career)!;
   const db = useGame((s) => s.db)!;
   const userClub = db.clubs[career.selectedClubId];
-  const players = Object.values(db.players).filter((p) => p.clubId === userClub.id);
+  // Indexed lookup — O(1) after first call this session (see lib/dbIndex).
+  const players = useMemo(() => playersForClub(db.players, userClub.id), [db.players, userClub.id]);
   const nextFx = useGame((s) => s.getNextUserFixture)();
   const opp = nextFx
     ? db.clubs[nextFx.homeId === userClub.id ? nextFx.awayId : nextFx.homeId]

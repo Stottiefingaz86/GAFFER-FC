@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppShell } from "@/components/game/AppShell";
 import { TeamCrest } from "@/components/game/TeamCrest";
@@ -13,7 +14,25 @@ import { MATCHDAY_LABEL } from "@/types/game";
 import { readableOn } from "@/lib/color";
 import { playAmbient, playSfx, stopAmbient } from "@/lib/sound";
 import { ambientForCompetition, dwellMsForEvent, sfxForEvent } from "@/lib/matchAudio";
-import { MatchViewer } from "@/components/pixi/MatchViewer";
+import { playersForClub } from "@/lib/dbIndex";
+
+// Pixi is heavy (~600KB minified) and only needed in the "watching"
+// branch. Dynamic-import it so the match-day preview screen paints
+// instantly and users who pick Quick Sim never pay the cost.
+// `ssr: false` because PixiJS touches the DOM/WebGL on import.
+const MatchViewer = dynamic(
+  () => import("@/components/pixi/MatchViewer").then((m) => m.MatchViewer),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full aspect-[3/5] max-h-[640px] mx-auto bg-[#0a3a14] border-2 border-[color:var(--ss-bar-edge)] rounded-sm flex items-center justify-center">
+        <span className="text-[10px] uppercase tracking-[0.2em] text-[color:var(--ss-cream)] animate-pulse">
+          Loading pitch…
+        </span>
+      </div>
+    ),
+  },
+);
 
 export default function MatchDayPage() {
   // We render the inner page first, then let it pick its own chrome
@@ -50,7 +69,7 @@ function MatchDayInner() {
   const competitionName = (nextFx && db) ? db.competitions[nextFx.competitionId].name : "";
 
   const oppPlayers = useMemo(() =>
-    (opp && db) ? Object.values(db.players).filter((p) => p.clubId === opp.id) : [],
+    (opp && db) ? playersForClub(db.players, opp.id) : [],
     [db, opp]
   );
   const oppKey = useMemo(() => {
