@@ -49,9 +49,15 @@ import { createRng, clamp, type Rng } from "@/lib/rng";
 /**
  * Cost to dispatch a one-off scout to a single player. Tuned so the
  * baseline (a 60-rated journeyman at a domestic club) is a rounding
- * error and the headline (a 90-rated wonderkid at a foreign giant) is
- * a meaningful budget hit — enough that the user thinks twice before
- * scouting every player on every club page.
+ * error and the headline (a 95-rated megastar at a foreign giant) is
+ * a serious budget commitment — enough that the user thinks twice
+ * before scouting every player on every club page, and tier-1 clubs
+ * have to choose where they spend their scouting £.
+ *
+ * Numbers were rebalanced after user feedback that top-tier scouts
+ * felt "free" relative to the £20m+ budgets at top-flight clubs. The
+ * new top of the curve (a 95+ OVR / 90+ POT wonderkid abroad) clears
+ * £1m so it reads on the budget panel.
  */
 export function costToScoutPlayer(
   player: Player,
@@ -63,26 +69,30 @@ export function costToScoutPlayer(
 
   // Overall multiplier — the dominant driver. The bands are wide on
   // purpose so the user can roughly read the cost back as "this player
-  // is in the 70s, OK that's £25k".
-  if (player.overall >= 90) cost = 100_000;
-  else if (player.overall >= 85) cost = 50_000;
-  else if (player.overall >= 80) cost = 25_000;
-  else if (player.overall >= 75) cost = 15_000;
-  else if (player.overall >= 70) cost = 8_000;
-  else if (player.overall >= 60) cost = 5_000;
-  else cost = 3_000;
+  // is in the 90s, OK that's £250k". 95+ is the Mbappé/Messi tier —
+  // its own band so megastar inquiries actually feel expensive.
+  if      (player.overall >= 95) cost = 500_000;
+  else if (player.overall >= 90) cost = 250_000;
+  else if (player.overall >= 85) cost = 100_000;
+  else if (player.overall >= 80) cost = 45_000;
+  else if (player.overall >= 75) cost = 20_000;
+  else if (player.overall >= 70) cost = 10_000;
+  else if (player.overall >= 65) cost = 5_000;
+  else if (player.overall >= 60) cost = 3_500;
+  else cost = 2_000;
 
   // Potential premium — wonderkids cost more even when their current
-  // overall is still in the academy bands. Stack on top of the OVR
-  // band, never replaces it (a 70 OVR / 92 POT teen costs more than a
-  // 70 OVR / 72 POT journeyman).
-  if (player.potential >= 90) cost = Math.round(cost * 1.6);
-  else if (player.potential >= 85) cost = Math.round(cost * 1.35);
-  else if (player.potential >= 80) cost = Math.round(cost * 1.15);
+  // overall is still in the academy bands. Stacks on top of the OVR
+  // band (a 70 OVR / 92 POT teen costs more than a 70 OVR / 72 POT
+  // journeyman). Tightened up after rebalancing so a hidden gem still
+  // has a meaningful surcharge.
+  if      (player.potential >= 90) cost = Math.round(cost * 1.8);
+  else if (player.potential >= 85) cost = Math.round(cost * 1.4);
+  else if (player.potential >= 80) cost = Math.round(cost * 1.2);
 
   // Age discount — over-30s have a short shelf life and the league
   // already knows them inside out, so scouts price the trip down.
-  if (player.age >= 33) cost = Math.round(cost * 0.6);
+  if      (player.age >= 33) cost = Math.round(cost * 0.6);
   else if (player.age >= 30) cost = Math.round(cost * 0.8);
 
   // Foreign-club surcharge — flying a scout to a different nation
@@ -96,10 +106,13 @@ export function costToScoutPlayer(
     userClub.nationId &&
     targetClub.nationId !== userClub.nationId
   ) {
-    cost = Math.round(cost * 1.3);
+    cost = Math.round(cost * 1.5);
   }
 
-  return cost;
+  // Round to a clean 100 so the toast/popover numbers always read as
+  // "£245k" rather than "£244,752" — small detail but the popover is
+  // a compact panel and tidy numbers are more glanceable.
+  return Math.round(cost / 100) * 100;
 }
 
 // =====================================================================
