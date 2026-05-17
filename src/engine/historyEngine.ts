@@ -21,6 +21,9 @@ export function competitionLabel(id: string): string {
   if (id === COMP_IDS.D3) return DIVISION_NAMES[4].name;
   if (id === COMP_IDS.NATIONAL_CUP) return "National Cup";
   if (id === COMP_IDS.LEAGUE_CUP) return "League Cup";
+  if (id === COMP_IDS.CHAMPIONS_CUP) return "Champions Cup";
+  if (id === COMP_IDS.CONTINENTAL_CUP) return "Continental Cup";
+  if (id === COMP_IDS.SUPER_SHIELD) return "Super Shield";
   return id;
 }
 

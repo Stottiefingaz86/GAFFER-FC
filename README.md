@@ -134,6 +134,31 @@ Out-of-scope for this MVP and ready as types / placeholder screens:
 - Multiplayer / friend leagues (Supabase auth, cloud saves, badge uploads)
 - Continental cup full bracket auto-population from qualification
 
+## Deploying to Vercel
+
+The repository ships with a minimal `vercel.json` that pins the framework
+preset, so `vercel --prod` and the Git-import flow both work out of the box.
+
+1. Sign in to [vercel.com](https://vercel.com) with your GitHub account.
+2. **Add New → Project → Import Git Repository** and pick `GAFFER-FC`.
+3. Vercel auto-detects the framework as **Next.js**. Leave every setting
+   on its default (root directory blank, build command `next build`,
+   output directory blank).
+4. Hit **Deploy**. The first build runs `npm install` then `next build`
+   and takes ~90 seconds.
+
+Vercel will assign a URL like `gaffer-fc-<your-username>.vercel.app`. The
+short `gaffer-fc.vercel.app` slug is global and may already be taken by
+someone else — always use the URL Vercel shows in the dashboard.
+
+**If the build fails**, click into the deployment for the build log.
+Common causes:
+
+- A pre-existing project on Vercel with the wrong **Root Directory**
+  (set it back to the repo root).
+- An older Node version pinned in **Project Settings → General**.
+  Next.js 16 needs Node 20+.
+
 ## Disclaimer
 
 All clubs, players, badges, kits, stadiums, and competitions are fictional.

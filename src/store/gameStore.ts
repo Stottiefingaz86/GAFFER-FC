@@ -33,16 +33,18 @@ import {
   DIVISION_NAMES,
 } from "@/data/competitionSeeds";
 import {
+  generateContinentalCupRoundOne,
   generateCupRoundOne,
   generateLeagueFixtures,
+  generateNextKnockoutRound,
 } from "@/generators/fixtureGenerator";
+import { runPyramidRollover } from "@/engine/pyramidEngine";
 import {
   applyMatchToPlayers,
   applyResultToTable,
   autoLineup,
   emptyTable,
   recoverNonPlayers,
-  resetTables,
   runSeasonRollover,
 } from "@/engine/leagueEngine";
 import { spriteOverrideFor } from "@/data/clubSpriteOverrides";
@@ -912,6 +914,91 @@ export const useGame = create<GameStoreApi>((set, get) => ({
 
     let nextCareer: Career = { ...career, manager: nextManager, week: week + 1, updatedAt: new Date().toISOString() };
 
+    // ===== Continental cup round progression =====
+    // Champions Cup + Continental Cup are 8-team single-leg knockouts.
+    // Round 1 fixtures get dropped into db.fixtures during the season
+    // rollover; here we detect "all ties of round N just played" and
+    // spawn round N+1 from the winners. We do this for every weekly
+    // tick rather than relying on a fixed schedule so a postponed tie
+    // doesn't desync the bracket.
+    const continentalCups: Array<{ id: string; firstRoundWeek: number }> = [
+      { id: COMP_IDS.CHAMPIONS_CUP, firstRoundWeek: 8 },
+      { id: COMP_IDS.CONTINENTAL_CUP, firstRoundWeek: 10 },
+    ];
+    for (const cup of continentalCups) {
+      const cupFixtures = nextDb.fixtures.filter((f) => f.competitionId === cup.id);
+      if (cupFixtures.length === 0) continue;
+      const maxRound = cupFixtures.reduce((m, f) => Math.max(m, f.round), 0);
+      const lastRound = cupFixtures.filter((f) => f.round === maxRound);
+      const allLastPlayed = lastRound.every((f) => f.played);
+      if (!allLastPlayed) continue;
+      // Single tie left → final is over, cup is decided.
+      if (lastRound.length <= 1) continue;
+
+      // Compute winners of the last round.
+      const winners: string[] = [];
+      lastRound.forEach((f) => {
+        if (!f.result) return;
+        const homeWon = f.result.homeGoals > f.result.awayGoals;
+        const awayWon = f.result.awayGoals > f.result.homeGoals;
+        if (homeWon) winners.push(f.homeId);
+        else if (awayWon) winners.push(f.awayId);
+        else {
+          // Draw → quick coin-flip resolved by deterministic RNG so the
+          // bracket can never stall. (Match engine already nudges cup
+          // ties away from draws but we belt-and-brace just in case.)
+          const flipRng = createRng(`${career.id}_ko_${f.id}`);
+          winners.push(flipRng.bool(0.5) ? f.homeId : f.awayId);
+        }
+      });
+
+      // Schedule the next round 6 weeks after the previous one to give
+      // the league fixtures breathing room. (Cup ties already use TUE/
+      // WED, so this never collides with a Sat league round.)
+      const previousWeek = lastRound[0]?.week ?? cup.firstRoundWeek;
+      const nextRoundWeek = previousWeek + 6;
+      const totalBracket = nextDb.competitions[cup.id]?.teamIds.length ?? winners.length * 2;
+
+      const nextRoundFixtures = generateNextKnockoutRound(
+        cup.id,
+        winners,
+        maxRound,
+        totalBracket,
+        nextRoundWeek,
+        createRng(`${career.id}_${cup.id}_r${maxRound + 1}`),
+      );
+      if (nextRoundFixtures.length > 0) {
+        nextDb.fixtures = [...nextDb.fixtures, ...nextRoundFixtures];
+
+        // Inbox notification when the user is involved in the next round
+        // — surfaces the next tie so they can plan ahead from the inbox.
+        const userTie = nextRoundFixtures.find(
+          (f) => f.homeId === career.selectedClubId || f.awayId === career.selectedClubId,
+        );
+        if (userTie) {
+          const oppId = userTie.homeId === career.selectedClubId ? userTie.awayId : userTie.homeId;
+          const oppName = nextDb.clubs[oppId]?.name ?? "TBD";
+          const compName = nextDb.competitions[cup.id]?.name ?? cup.id;
+          nextDb.inbox = [
+            {
+              id: `msg_${cup.id}_r${maxRound + 1}_${nextCareer.season}`,
+              week: nextCareer.week,
+              season: nextCareer.season,
+              category: "Board",
+              title: `${compName} ${userTie.stage ?? `Round ${userTie.round}`} draw`,
+              body:
+                `You've been drawn against ${oppName} in the ` +
+                `${userTie.stage ?? `Round ${userTie.round}`} of the ${compName}. ` +
+                `Tie is scheduled for Week ${userTie.week}.`,
+              read: false,
+              important: true,
+            },
+            ...nextDb.inbox,
+          ];
+        }
+      }
+    }
+
     // ===== Season rollover detection =====
     // After every league fixture is played the season is over. We then
     // run the off-season transition: retire elders, age survivors,
@@ -1057,37 +1144,109 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       regenCount: 200,
     });
 
-    // 2. Wipe last season's tables.
-    const newTables = resetTables(db.tables);
+    // 2. Pyramid shuffle — last season's bottom 3 of each division swap
+    //    with the top 3 of the division below. Also computes the
+    //    Champions / Continental Cup qualifiers from the same standings.
+    const pyramid = runPyramidRollover(report.standings);
 
-    // 3. Regenerate fixtures (same divisions / same teams — actual
-    //    promotion/relegation comes in a future patch).
+    // Apply the new divisionId to every club that moved.
+    const updatedClubs: Record<string, Club> = { ...db.clubs };
+    Object.entries(pyramid.clubDivisions).forEach(([clubId, divisionId]) => {
+      const club = updatedClubs[clubId];
+      if (!club) return;
+      if (club.divisionId !== divisionId) {
+        updatedClubs[clubId] = { ...club, divisionId };
+      }
+    });
+
+    // 3. Build fresh tables anchored on the NEW memberships.
+    const newTables: Record<string, ReturnType<typeof emptyTable>> = {};
+    ([1, 2, 3, 4] as const).forEach((tier) => {
+      const divisionId = DIVISION_NAMES[tier].id;
+      const teamIds = pyramid.divisionMembership[divisionId] ?? [];
+      newTables[divisionId] = emptyTable(divisionId, teamIds);
+    });
+
+    // 4. Update Competition.teamIds so the league screen / cups screen
+    //    see the new memberships.
+    const updatedCompetitions = { ...db.competitions };
+    ([1, 2, 3, 4] as const).forEach((tier) => {
+      const id = DIVISION_NAMES[tier].id;
+      const comp = updatedCompetitions[id];
+      if (comp) {
+        updatedCompetitions[id] = {
+          ...comp,
+          teamIds: pyramid.divisionMembership[id] ?? [],
+        };
+      }
+    });
+    const champsComp = updatedCompetitions[COMP_IDS.CHAMPIONS_CUP];
+    if (champsComp) {
+      updatedCompetitions[COMP_IDS.CHAMPIONS_CUP] = {
+        ...champsComp,
+        teamIds: pyramid.championsCupTeamIds,
+      };
+    }
+    const contComp = updatedCompetitions[COMP_IDS.CONTINENTAL_CUP];
+    if (contComp) {
+      updatedCompetitions[COMP_IDS.CONTINENTAL_CUP] = {
+        ...contComp,
+        teamIds: pyramid.continentalCupTeamIds,
+      };
+    }
+
+    // 5. Regenerate fixtures with the updated memberships.
     const newFixtures: Fixture[] = [];
     ([1, 2, 3, 4] as const).forEach((tier) => {
       const id = DIVISION_NAMES[tier].id;
-      const teamIds = newTables[id]?.rows.map((r) => r.clubId) ?? [];
-      if (teamIds.length) {
+      const teamIds = pyramid.divisionMembership[id] ?? [];
+      if (teamIds.length >= 2 && teamIds.length % 2 === 0) {
         newFixtures.push(
           ...generateLeagueFixtures(id, teamIds, rolloverRng.fork(`fx_${id}`)),
         );
       }
     });
-    const allClubIds = Object.keys(db.clubs);
+    const allClubIds = Object.keys(updatedClubs);
     newFixtures.push(
       ...generateCupRoundOne(COMP_IDS.NATIONAL_CUP, allClubIds, 4, rolloverRng.fork("ncup")),
       ...generateCupRoundOne(COMP_IDS.LEAGUE_CUP, allClubIds, 6, rolloverRng.fork("lcup")),
     );
 
-    // 4. Refresh every club's lineup against the new (aged) squads.
+    // Champions Cup + Continental Cup — round 1 only. Subsequent rounds
+    // are appended by `advanceCupRoundsIfReady` once round 1 has been
+    // played (so we don't have to deal with placeholder team ids).
+    if (pyramid.championsCupTeamIds.length >= 4) {
+      newFixtures.push(
+        ...generateContinentalCupRoundOne(
+          COMP_IDS.CHAMPIONS_CUP,
+          pyramid.championsCupTeamIds,
+          8,
+          rolloverRng.fork("ccup_r1"),
+        ),
+      );
+    }
+    if (pyramid.continentalCupTeamIds.length >= 4) {
+      newFixtures.push(
+        ...generateContinentalCupRoundOne(
+          COMP_IDS.CONTINENTAL_CUP,
+          pyramid.continentalCupTeamIds,
+          10,
+          rolloverRng.fork("contcup_r1"),
+        ),
+      );
+    }
+
+    // 6. Refresh every club's lineup against the new (aged) squads.
     const newLineups: Record<string, Lineup> = {};
-    Object.values(db.clubs).forEach((c) => {
+    Object.values(updatedClubs).forEach((c) => {
       const squad = Object.values(rollover.players).filter((p) => p.clubId === c.id);
       const prev = db.lineups[c.id];
       newLineups[c.id] = autoLineup(c, squad, prev?.formationKey ?? "4-4-2");
     });
 
-    // 5. Inbox dispatch — prize-money receipt + off-season summary.
-    const userClub = db.clubs[career.selectedClubId];
+    // 7. Inbox dispatch — prize-money receipt, pyramid summary,
+    //    Champions Cup qualification, off-season summary.
+    const userClub = updatedClubs[career.selectedClubId];
     const retiredOnYourClub = rollover.retiredIds
       .map((id) => db.players[id])
       .filter((p): p is Player => !!p && p.clubId === career.selectedClubId);
@@ -1116,6 +1275,82 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       });
     }
 
+    // ----- Pyramid narrative inbox -----
+    if (pyramid.swaps.length > 0) {
+      // Group swaps by the upper division they involve, so the inbox
+      // copy reads "Premier: ↑ X promoted from Division One; ↓ Y went
+      // down" boundary by boundary.
+      const grouped = new Map<
+        string,
+        { promoted: string[]; relegated: string[]; lowerLabel: string }
+      >();
+      pyramid.swaps.forEach((sw) => {
+        const bucket =
+          grouped.get(sw.upToDivisionId) ?? {
+            promoted: [],
+            relegated: [],
+            lowerLabel: competitionLabel(sw.upFromDivisionId),
+          };
+        bucket.promoted.push(updatedClubs[sw.upClubId]?.name ?? sw.upClubId);
+        bucket.relegated.push(updatedClubs[sw.downClubId]?.name ?? sw.downClubId);
+        grouped.set(sw.upToDivisionId, bucket);
+      });
+
+      const sections: string[] = [];
+      for (const [divisionId, bucket] of grouped.entries()) {
+        sections.push(
+          `${competitionLabel(divisionId)}: ` +
+            `↑ ${bucket.promoted.join(", ")} promoted from ${bucket.lowerLabel}; ` +
+            `↓ ${bucket.relegated.join(", ")} relegated.`,
+        );
+      }
+
+      const userMoved = pyramid.swaps.find(
+        (sw) => sw.upClubId === career.selectedClubId || sw.downClubId === career.selectedClubId,
+      );
+      const userMoveLine = userMoved
+        ? userMoved.upClubId === career.selectedClubId
+          ? `You're going up — ${userClub?.name ?? "your club"} now plays in the ${competitionLabel(userMoved.upToDivisionId)}.`
+          : `You're going down — ${userClub?.name ?? "your club"} now plays in the ${competitionLabel(userMoved.upFromDivisionId)}.`
+        : "";
+
+      updatedInbox.unshift({
+        id: `msg_pyramid_${seasonClosed}`,
+        week: 1,
+        season: seasonClosed,
+        category: "Board",
+        title: `Promotion & Relegation — Season ${seasonClosed}`,
+        body: [userMoveLine, ...sections].filter(Boolean).join("\n\n"),
+        read: false,
+        important: !!userMoved,
+      });
+    }
+
+    // ----- Champions Cup qualification narrative -----
+    const userInChampions = pyramid.championsCupTeamIds.includes(career.selectedClubId);
+    const userInContinental = pyramid.continentalCupTeamIds.includes(career.selectedClubId);
+    if (userInChampions || userInContinental) {
+      const compName = userInChampions ? "Champions Cup" : "Continental Cup";
+      const otherTeams = (userInChampions ? pyramid.championsCupTeamIds : pyramid.continentalCupTeamIds)
+        .filter((id) => id !== career.selectedClubId)
+        .map((id) => updatedClubs[id]?.name ?? id);
+      updatedInbox.unshift({
+        id: `msg_${userInChampions ? "ccup" : "cont"}_${seasonClosed}`,
+        week: 1,
+        season: seasonClosed,
+        category: "Board",
+        title: `${userClub?.name ?? "Your club"} qualify for the ${compName}`,
+        body:
+          `Last season's finishing position has earned ${userClub?.name ?? "your club"} ` +
+          `a place in the ${compName}. The 8-team knockout opens with the ` +
+          `Quarterfinal in Week 8 — keep an eye on the Cups screen for the bracket.\n\n` +
+          `Other qualified clubs: ${otherTeams.join(", ")}.`,
+        read: false,
+        important: true,
+      });
+    }
+
+    // ----- Off-season summary inbox (existing) -----
     const trophyLine = report.trophies.filter((t) => t.position === 1).length
       ? `You lifted ${report.trophies
           .filter((t) => t.position === 1)
@@ -1153,6 +1388,8 @@ export const useGame = create<GameStoreApi>((set, get) => ({
 
     const nextDb: GameDatabase = {
       ...db,
+      clubs: updatedClubs,
+      competitions: updatedCompetitions,
       players: rollover.players,
       tables: newTables,
       fixtures: newFixtures,
