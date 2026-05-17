@@ -13,7 +13,7 @@ import { MATCHDAY_LABEL } from "@/types/game";
 import { readableOn } from "@/lib/color";
 import { playAmbient, playSfx, stopAmbient } from "@/lib/sound";
 import { ambientForCompetition, dwellMsForEvent, sfxForEvent } from "@/lib/matchAudio";
-import { PitchSimulator } from "@/components/game/PitchSimulator";
+import { MatchViewer } from "@/components/pixi/MatchViewer";
 
 export default function MatchDayPage() {
   // We render the inner page first, then let it pick its own chrome
@@ -472,7 +472,7 @@ function WatchHighlights({
 
       <div className="grid grid-cols-1 md:grid-cols-[minmax(280px,360px)_1fr] gap-0 border-t-2 border-[color:var(--ss-bar-edge)]">
         <div className="bg-[color:var(--ss-bg-deep)] py-3 px-3 md:border-r-2 border-b-2 md:border-b-0 border-[color:var(--ss-bar-edge)]">
-          <PitchSimulator
+          <MatchViewer
             result={result}
             tickIndex={tickIndex}
             home={home}
