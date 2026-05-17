@@ -563,11 +563,19 @@ function ordinal(n: number): string {
 }
 
 // =====================================================================
-// NationSwitcher — region-aware nation tab bar. Once we have more than
-// 6 nations in the save, we surface a region-filter row above the
-// nation tabs (Sensible-Soccer-style) so the bar doesn't sprawl
-// horizontally. With <=6 we just render the flat nation list, since
-// filtering by region adds clutter without payoff.
+// NationSwitcher — region-aware nation tab bar.
+//
+// We always render the region filter row when >6 nations are loaded
+// (Sensible-Soccer-style) and default the filter to the USER'S OWN
+// region so opening the page shows ~3-5 flags instead of 15+. The ALL
+// tab still exists for users who want to browse every nation — it
+// shows the total in parentheses so it's clear there's more on tap.
+//
+// Each scroll row is wrapped in a fade-edge container so when the
+// content overflows horizontally the user can see (a) that more is
+// hidden and (b) which direction to scroll. The fades are pure CSS
+// gradients sitting above the scroll area; they don't intercept
+// clicks (pointer-events-none).
 // =====================================================================
 function NationSwitcher({
   visibleNations,
@@ -581,7 +589,16 @@ function NationSwitcher({
   onPick: (id: string) => void;
 }) {
   const showRegionFilter = visibleNations.length > 6;
-  const [region, setRegion] = useState<NationRegion | "all">("all");
+
+  // Default the region to the user's own region so the bar starts
+  // compact (typically 3-5 flags) instead of dumping every nation.
+  // Falls back to "all" if the user's nation has no region tag (older
+  // single-nation saves).
+  const userRegion = useMemo<NationRegion | "all">(() => {
+    const own = visibleNations.find((n) => n.id === userNationId)?.region;
+    return own ?? "all";
+  }, [visibleNations, userNationId]);
+  const [region, setRegion] = useState<NationRegion | "all">(userRegion);
 
   const regionsInPlay = REGIONS.filter((r) =>
     visibleNations.some((n) => n.region === r.id),
@@ -590,28 +607,42 @@ function NationSwitcher({
     ? visibleNations
     : visibleNations.filter((n) => n.region === region);
 
+  // When the user switches region but their currently-selected nation
+  // isn't visible in that region, also auto-pick the first nation
+  // (preferably the user's own when on "all"). This stops the active
+  // selection from "disappearing" off-screen — the scroller would
+  // otherwise show an empty selection state with no obvious indication.
+  const handleRegionChange = (r: NationRegion | "all") => {
+    setRegion(r);
+    const nextList = r === "all" ? visibleNations : visibleNations.filter((n) => n.region === r);
+    if (!nextList.some((n) => n.id === nationId)) {
+      const fallback = nextList.find((n) => n.id === userNationId) ?? nextList[0];
+      if (fallback) onPick(fallback.id);
+    }
+  };
+
   return (
     <div className="space-y-1.5">
       {showRegionFilter && (
-        <div className="tabbar overflow-x-auto scrollbar-thin">
+        <ScrollRow>
           <button
-            onClick={() => setRegion("all")}
+            onClick={() => handleRegionChange("all")}
             className={`tab whitespace-nowrap text-[10px] ${region === "all" ? "active" : ""}`}
           >
-            ALL
+            ALL <span className="opacity-70">({visibleNations.length})</span>
           </button>
           {regionsInPlay.map((r) => (
             <button
               key={r.id}
-              onClick={() => setRegion(r.id)}
+              onClick={() => handleRegionChange(r.id)}
               className={`tab whitespace-nowrap text-[10px] ${region === r.id ? "active" : ""}`}
             >
               {r.shortLabel.toUpperCase()}
             </button>
           ))}
-        </div>
+        </ScrollRow>
       )}
-      <div className="tabbar overflow-x-auto scrollbar-thin">
+      <ScrollRow>
         {filteredNations.map((n) => (
           <button
             key={n.id}
@@ -625,7 +656,40 @@ function NationSwitcher({
             ) : null}
           </button>
         ))}
+      </ScrollRow>
+    </div>
+  );
+}
+
+/** Horizontally-scrolling tabbar wrapper with fade-edge gradients.
+ *  The gradients hint that more content is hidden offscreen — without
+ *  them a row of 15+ flags inside `overflow-x-auto` reads as "this is
+ *  everything" because the native scrollbar is so thin. */
+function ScrollRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative">
+      <div className="tabbar overflow-x-auto scrollbar-thin">
+        {children}
       </div>
+      {/* Left fade — hidden visually on the very first paint via mask
+          but always rendered so we don't trigger a layout shift on
+          scroll. Pointer-events-none so it never intercepts taps. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-6"
+        style={{
+          background:
+            "linear-gradient(to right, var(--ss-bg-deep, #0a1428) 0%, rgba(10,20,40,0) 100%)",
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-6"
+        style={{
+          background:
+            "linear-gradient(to left, var(--ss-bg-deep, #0a1428) 0%, rgba(10,20,40,0) 100%)",
+        }}
+      />
     </div>
   );
 }
