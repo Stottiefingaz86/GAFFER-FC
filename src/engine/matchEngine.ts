@@ -21,6 +21,7 @@ import type {
 import { clamp, type Rng } from "@/lib/rng";
 import { FORMATIONS } from "@/data/formations";
 import { divisionTierFor } from "@/data/nations";
+import { generateHighlights } from "@/engine/highlightGenerator";
 
 // =====================================================================
 // SHAPE QUALITY — judges whether a lineup is *coherent* on top of being
@@ -586,6 +587,8 @@ export function simulateMatch(
       events.push({
         minute, type: evType, team,
         playerId: scorer.id, playerName: scorer.displayName, text,
+        assisterId: assister?.id,
+        assisterName: assister?.displayName,
       });
 
       const rTeam = team === "home" ? ratings.home : ratings.away;
@@ -683,7 +686,7 @@ export function simulateMatch(
   const homeBoard = winnerSide === "home" ? 3 : winnerSide === "draw" ? 0 : -2;
   const awayBoard = winnerSide === "away" ? 2 : winnerSide === "draw" ? 0 : -2;
 
-  return {
+  const baseResult: MatchResult = {
     fixtureId: fixture.id,
     competitionId: fixture.competitionId,
     homeId: home.id,
@@ -704,4 +707,27 @@ export function simulateMatch(
     boardConfidenceChangeHome: homeBoard,
     boardConfidenceChangeAway: awayBoard,
   };
+
+  // ── Build the structured highlight feed for the new Pixi viewer.
+  //    Uses a FORKED rng so the highlight layout is deterministic but
+  //    completely decoupled from the engine's RNG cursor (we don't
+  //    want chance generation to drift just because the highlight
+  //    builder rolled a few extra numbers). The legacy engine's
+  //    result is the source of truth — the generator only adds the
+  //    structured "what happened in zone X with player Y" data the
+  //    viewer needs to animate. QuickSim and Watch Highlights see
+  //    identical content.
+  const highlightRng = rng.fork(`highlights:${fixture.id}`);
+  baseResult.highlights = generateHighlights({
+    result: baseResult,
+    homeClub: home,
+    awayClub: away,
+    homeLineup,
+    awayLineup,
+    players,
+    isCupGame,
+    isDerby: setup.homeRivalry || setup.awayRivalry,
+    rng: highlightRng,
+  });
+  return baseResult;
 }

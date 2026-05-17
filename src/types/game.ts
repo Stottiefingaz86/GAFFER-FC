@@ -559,6 +559,11 @@ export interface MatchEvent {
   subOffPlayerId?: string;
   /** Only set on Substitution events — display name for the player coming off. */
   subOffPlayerName?: string;
+  /** Optional assister on a goal event. Lets the highlight generator
+   * (see `engine/highlightGenerator.ts`) build "X assists Y" copy
+   * without re-rolling who set the goal up. */
+  assisterId?: string;
+  assisterName?: string;
 }
 
 export type MatchEventType =
@@ -627,6 +632,11 @@ export interface MatchResult {
   fanMoodChangeAway: number;
   boardConfidenceChangeHome: number;
   boardConfidenceChangeAway: number;
+  /** Structured highlight feed consumed by the new Pixi MatchViewer.
+   * Built by `highlightGenerator.ts` AFTER `simulateMatch` finishes,
+   * so QuickSim and Watch-Highlights see identical content. Optional
+   * for backwards compat with saves that pre-date the new viewer. */
+  highlights?: import("./match").HighlightEvent[];
 }
 
 export interface TeamMatchStats {
