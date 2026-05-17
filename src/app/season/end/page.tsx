@@ -29,6 +29,8 @@ import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { useGame } from "@/store/gameStore";
 import { COMP_IDS } from "@/data/competitionSeeds";
 import { competitionLabel } from "@/engine/historyEngine";
+import { NATIONS, NATION_IDS, divisionTierFor, nationOfCompetition } from "@/data/nations";
+import { NationFlag } from "@/components/game/NationFlag";
 import type {
   Career,
   GameDatabase,
@@ -678,17 +680,72 @@ function FinalStandings({
   db: GameDatabase;
   userClubId: string;
 }) {
+  // Group standings by nation so the user gets clean "England" /
+  // "Italy" / etc. headers above each pyramid. The user's own
+  // nation always renders first; everything else follows in registry
+  // order.
+  const userNationId =
+    nationOfCompetition(report.userDivisionId)?.id ?? NATION_IDS.ENGLAND;
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, SeasonReportDivisionStandings[]>();
+    report.standings.forEach((s) => {
+      const nation = nationOfCompetition(s.divisionId);
+      const nid = nation?.id ?? "_unknown";
+      if (!map.has(nid)) map.set(nid, []);
+      map.get(nid)!.push(s);
+    });
+    map.forEach((arr) => {
+      arr.sort((a, b) => {
+        const ta = divisionTierFor(a.divisionId)?.tier ?? 99;
+        const tb = divisionTierFor(b.divisionId)?.tier ?? 99;
+        return ta - tb;
+      });
+    });
+    return map;
+  }, [report.standings]);
+
+  const orderedNationIds = [
+    userNationId,
+    ...NATIONS.map((n) => n.id).filter((id) => id !== userNationId),
+  ];
+
   return (
-    <section className="space-y-2">
-      {report.standings.map((standings) => (
-        <DivisionTable
-          key={standings.divisionId}
-          standings={standings}
-          db={db}
-          userClubId={userClubId}
-          defaultOpen={standings.divisionId === report.userDivisionId}
-        />
-      ))}
+    <section className="space-y-4">
+      {orderedNationIds.map((nationId) => {
+        const standingsArr = grouped.get(nationId);
+        if (!standingsArr || standingsArr.length === 0) return null;
+        const nation = NATIONS.find((n) => n.id === nationId);
+        const isUserNation = nationId === userNationId;
+        return (
+          <div key={nationId}>
+            {nation && (
+              <div className="flex items-center gap-2 mb-1.5 px-1">
+                <NationFlag nation={nation} size={16} />
+                <div className="text-[12px] font-extrabold uppercase tracking-[0.18em] text-[color:var(--ss-cream)]">
+                  {nation.name}
+                </div>
+                {isUserNation && (
+                  <span className="text-[9px] uppercase tracking-[0.16em] text-[color:var(--ss-accent)] font-bold">
+                    ★ Your Nation
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="space-y-2">
+              {standingsArr.map((standings) => (
+                <DivisionTable
+                  key={standings.divisionId}
+                  standings={standings}
+                  db={db}
+                  userClubId={userClubId}
+                  defaultOpen={standings.divisionId === report.userDivisionId}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }

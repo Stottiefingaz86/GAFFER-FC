@@ -24,7 +24,8 @@
 //   - Cup wins are a nice top-up but never carry a season alone.
 // =====================================================================
 
-import { COMP_IDS, DIVISION_NAMES } from "@/data/competitionSeeds";
+import { COMP_IDS } from "@/data/competitionSeeds";
+import { divisionTierFor } from "@/data/nations";
 import type { Fixture, GameDatabase, LeagueTable } from "@/types/game";
 import { competitionLabel } from "./historyEngine";
 
@@ -182,8 +183,13 @@ export function computeSeasonPayouts(db: GameDatabase): PrizeMoneyResult {
   };
 
   // ---------- 1. League prize money ----------
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const divisionId = DIVISION_NAMES[tier].id;
+  // Pay every league across every nation in the world. The prize
+  // bands scale by tier the same way for each nation — top flight
+  // pays out the most, tier 4 the least.
+  Object.keys(db.tables).forEach((divisionId) => {
+    const lookup = divisionTierFor(divisionId);
+    if (!lookup) return;
+    const tier = lookup.tier;
     const table = db.tables[divisionId];
     if (!table) return;
 

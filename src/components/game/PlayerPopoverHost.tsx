@@ -16,6 +16,7 @@ import { PlayerStatPopover } from "@/components/game/PlayerStatPopover";
 import { toast } from "@/components/game/Toaster";
 import { useGame } from "@/store/gameStore";
 import { usePopoverStore } from "@/store/popoverStore";
+import { formatValue } from "@/lib/playerValue";
 
 export function PlayerPopoverHost() {
   const router = useRouter();
@@ -32,13 +33,17 @@ export function PlayerPopoverHost() {
   const isScouted = useGame((s) =>
     current ? s.isPlayerScouted(current.playerId) : false,
   );
-  const scoutPlayer = useGame((s) => s.scoutPlayer);
+  const scoutCost = useGame((s) =>
+    current ? s.scoutCostFor(current.playerId) : 0,
+  );
+  const scoutPlayerPaid = useGame((s) => s.scoutPlayerPaid);
 
   if (!current || !player) return null;
 
   const isOwn = !!userClub && player.clubId === userClub.id;
   // Captain only matters for the user's own players.
   const isCaptain = isOwn && lineup?.captainId === player.id;
+  const canAffordScout = !userClub || scoutCost === 0 || userClub.budget >= scoutCost;
 
   return (
     <PlayerStatPopover
@@ -46,9 +51,27 @@ export function PlayerPopoverHost() {
       anchor={current.anchor}
       isCaptain={isCaptain}
       isScouted={isScouted}
+      scoutCost={scoutCost}
+      canAffordScout={canAffordScout}
       onSendScout={() => {
-        scoutPlayer(player.id);
-        toast(`${player.lastName} scouted`, "success");
+        const result = scoutPlayerPaid(player.id);
+        if (result.ok) {
+          toast(
+            result.cost > 0
+              ? `${player.lastName} scouted · ${formatValue(result.cost)} paid`
+              : `${player.lastName} scouted`,
+            "success",
+          );
+        } else if (result.reason === "insufficient") {
+          toast(
+            `Insufficient funds — need ${formatValue(result.cost)}`,
+            "warn",
+          );
+        } else if (result.reason === "already") {
+          toast(`${player.lastName} already scouted`, "info");
+        } else {
+          toast("Could not file scout report", "warn");
+        }
       }}
       onClose={close}
       onMakeBid={

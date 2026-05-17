@@ -10,6 +10,7 @@ import { useGame } from "@/store/gameStore";
 import { motion } from "framer-motion";
 import { formatValue } from "@/lib/playerValue";
 import type { Club, Fixture, GameDatabase } from "@/types/game";
+import { isLeagueCompetitionId } from "@/data/nations";
 
 export default function DashboardPage() {
   return (
@@ -259,7 +260,7 @@ function FixturesPanel({
       .filter((f) => f.homeId === userClub.id || f.awayId === userClub.id)
       .filter((f) => {
         if (filter === "all") return true;
-        const isLeague = f.competitionId.startsWith("div_");
+        const isLeague = isLeagueCompetitionId(f.competitionId);
         return filter === "league" ? isLeague : !isLeague;
       })
       .sort((a, b) => a.week - b.week);
@@ -277,7 +278,7 @@ function FixturesPanel({
     const all = db.fixtures.filter(
       (f) => f.homeId === userClub.id || f.awayId === userClub.id,
     );
-    const league = all.filter((f) => f.competitionId.startsWith("div_"));
+    const league = all.filter((f) => isLeagueCompetitionId(f.competitionId));
     return { all: all.length, league: league.length, cups: all.length - league.length };
   }, [db.fixtures, userClub.id]);
 
@@ -417,7 +418,7 @@ const FixtureRow = forwardRef<
   const isHome = home.id === userClub.id;
   const opp = isHome ? away : home;
   const competition = db.competitions[fixture.competitionId];
-  const isLeague = fixture.competitionId.startsWith("div_");
+  const isLeague = isLeagueCompetitionId(fixture.competitionId);
 
   let result: "W" | "D" | "L" | null = null;
   let scoreLabel = "vs";

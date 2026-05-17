@@ -10,6 +10,10 @@ export interface ClubSeed {
   name: string;
   shortName: string;
   city: string;
+  /** Which nation this club belongs to. Optional for the legacy
+   *  English seeds (which default to "england" in the team
+   *  generator); always set for procedural seeds. */
+  nationId?: string;
   divisionTier: 1 | 2 | 3 | 4;
   primary: string;
   secondary: string;
@@ -382,6 +386,109 @@ export const CLUB_SEEDS: ClubSeed[] = [
        badgeShape:"shield", badgeIcon:"mountain", badgePattern:"plain", kitPattern:"plain",
        stadium:"The Old Mill", foundingYear:1944, personality:"Mining Town Club", playStyle:"Defensive" }),
 ];
+
+// =====================================================================
+// MULTI-NATION SEED ASSEMBLY
+// The hand-crafted CLUB_SEEDS above are the English pyramid. Other
+// nations are seeded procedurally from city pools — see
+// `src/data/clubSeeds/cityPools.ts` and
+// `src/generators/clubSeedGenerator.ts`. The procedural seeds are
+// fully deterministic (same seed every run) so saves stay stable.
+// =====================================================================
+
+import { NATION_IDS } from "@/data/nations";
+import {
+  ITALY_CITIES,
+  SPAIN_CITIES,
+  GERMANY_CITIES,
+  SCOTLAND_CITIES,
+} from "@/data/clubSeeds/cityPools";
+import {
+  FRANCE_CITIES,
+  NETHERLANDS_CITIES,
+  BELGIUM_CITIES,
+  PORTUGAL_CITIES,
+  TURKEY_CITIES,
+  SWEDEN_CITIES,
+  NORWAY_CITIES,
+  DENMARK_CITIES,
+  POLAND_CITIES,
+  UKRAINE_CITIES,
+  CZECH_CITIES,
+  GREECE_CITIES,
+} from "@/data/clubSeeds/cityPoolsExtra";
+import {
+  generateClubSeeds,
+  ITALIAN_FLAVOUR,
+  SPANISH_FLAVOUR,
+  GERMAN_FLAVOUR,
+  SCOTTISH_FLAVOUR,
+  FRENCH_FLAVOUR,
+  DUTCH_FLAVOUR,
+  BELGIAN_FLAVOUR,
+  PORTUGUESE_FLAVOUR,
+  TURKISH_FLAVOUR,
+  SWEDISH_FLAVOUR,
+  NORWEGIAN_FLAVOUR,
+  DANISH_FLAVOUR,
+  POLISH_FLAVOUR,
+  UKRAINIAN_FLAVOUR,
+  CZECH_FLAVOUR,
+  GREEK_FLAVOUR,
+} from "@/generators/clubSeedGenerator";
+
+/** Per-nation seed list. Lazily computed once on first import. */
+function buildNationSeeds(): Record<string, ClubSeed[]> {
+  // English seeds default to nationId = england.
+  const englishSeeds: ClubSeed[] = CLUB_SEEDS.map((s) => ({
+    ...s,
+    nationId: NATION_IDS.ENGLAND,
+  }));
+  const stamp = (nationId: string, seeds: ClubSeed[]): ClubSeed[] =>
+    seeds.map((s) => ({ ...s, nationId }));
+  return {
+    [NATION_IDS.ENGLAND]:     englishSeeds,
+    [NATION_IDS.SCOTLAND]:    stamp(NATION_IDS.SCOTLAND,    generateClubSeeds(NATION_IDS.SCOTLAND,    SCOTLAND_CITIES,    SCOTTISH_FLAVOUR)),
+    [NATION_IDS.FRANCE]:      stamp(NATION_IDS.FRANCE,      generateClubSeeds(NATION_IDS.FRANCE,      FRANCE_CITIES,      FRENCH_FLAVOUR)),
+    [NATION_IDS.NETHERLANDS]: stamp(NATION_IDS.NETHERLANDS, generateClubSeeds(NATION_IDS.NETHERLANDS, NETHERLANDS_CITIES, DUTCH_FLAVOUR)),
+    [NATION_IDS.BELGIUM]:     stamp(NATION_IDS.BELGIUM,     generateClubSeeds(NATION_IDS.BELGIUM,     BELGIUM_CITIES,     BELGIAN_FLAVOUR)),
+    [NATION_IDS.GERMANY]:     stamp(NATION_IDS.GERMANY,     generateClubSeeds(NATION_IDS.GERMANY,     GERMANY_CITIES,     GERMAN_FLAVOUR)),
+    [NATION_IDS.CZECH]:       stamp(NATION_IDS.CZECH,       generateClubSeeds(NATION_IDS.CZECH,       CZECH_CITIES,       CZECH_FLAVOUR)),
+    [NATION_IDS.ITALY]:       stamp(NATION_IDS.ITALY,       generateClubSeeds(NATION_IDS.ITALY,       ITALY_CITIES,       ITALIAN_FLAVOUR)),
+    [NATION_IDS.SPAIN]:       stamp(NATION_IDS.SPAIN,       generateClubSeeds(NATION_IDS.SPAIN,       SPAIN_CITIES,       SPANISH_FLAVOUR)),
+    [NATION_IDS.PORTUGAL]:    stamp(NATION_IDS.PORTUGAL,    generateClubSeeds(NATION_IDS.PORTUGAL,    PORTUGAL_CITIES,    PORTUGUESE_FLAVOUR)),
+    [NATION_IDS.GREECE]:      stamp(NATION_IDS.GREECE,      generateClubSeeds(NATION_IDS.GREECE,      GREECE_CITIES,      GREEK_FLAVOUR)),
+    [NATION_IDS.TURKEY]:      stamp(NATION_IDS.TURKEY,      generateClubSeeds(NATION_IDS.TURKEY,      TURKEY_CITIES,      TURKISH_FLAVOUR)),
+    [NATION_IDS.SWEDEN]:      stamp(NATION_IDS.SWEDEN,      generateClubSeeds(NATION_IDS.SWEDEN,      SWEDEN_CITIES,      SWEDISH_FLAVOUR)),
+    [NATION_IDS.NORWAY]:      stamp(NATION_IDS.NORWAY,      generateClubSeeds(NATION_IDS.NORWAY,      NORWAY_CITIES,      NORWEGIAN_FLAVOUR)),
+    [NATION_IDS.DENMARK]:     stamp(NATION_IDS.DENMARK,     generateClubSeeds(NATION_IDS.DENMARK,     DENMARK_CITIES,     DANISH_FLAVOUR)),
+    [NATION_IDS.POLAND]:      stamp(NATION_IDS.POLAND,      generateClubSeeds(NATION_IDS.POLAND,      POLAND_CITIES,      POLISH_FLAVOUR)),
+    [NATION_IDS.UKRAINE]:     stamp(NATION_IDS.UKRAINE,     generateClubSeeds(NATION_IDS.UKRAINE,     UKRAINE_CITIES,     UKRAINIAN_FLAVOUR)),
+  };
+}
+
+let _nationSeedsCache: Record<string, ClubSeed[]> | null = null;
+function getNationSeeds(): Record<string, ClubSeed[]> {
+  if (!_nationSeedsCache) _nationSeedsCache = buildNationSeeds();
+  return _nationSeedsCache;
+}
+
+/** All ClubSeeds across every nation in the world, in a stable order
+ *  (England → Italy → Spain → Germany → Scotland; tier 1 → 4 within
+ *  each nation). Used by the world generator. */
+export function getAllClubSeeds(): ClubSeed[] {
+  const map = getNationSeeds();
+  // Concatenate every registered nation's seeds in registry order.
+  // We use Object.values directly so future nations are picked up
+  // automatically without having to amend this list.
+  return Object.values(map).flat();
+}
+
+/** Just the seeds for one nation. Used by the career picker to show
+ *  the user only clubs from their chosen nation. */
+export function getClubSeedsForNation(nationId: string): ClubSeed[] {
+  return getNationSeeds()[nationId] ?? [];
+}
 
 // Quick sanity check helpers (used at runtime once during db build).
 export function clubsByDivision(tier: 1 | 2 | 3 | 4): ClubSeed[] {

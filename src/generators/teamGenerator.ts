@@ -4,10 +4,11 @@
 // =====================================================================
 
 import type { Club, ClubHistory, Player, Trophy } from "@/types/game";
-import { CLUB_SEEDS, strengthTierFor, type ClubSeed, type StrengthTier } from "@/data/clubSeeds";
+import { strengthTierFor, type ClubSeed, type StrengthTier, getAllClubSeeds } from "@/data/clubSeeds";
 import { spriteOverrideFor } from "@/data/clubSpriteOverrides";
 import BADGE_PALETTES from "@/data/badgePalettes.json";
-import { COMP_IDS, DIVISION_NAMES } from "@/data/competitionSeeds";
+import { COMP_IDS } from "@/data/competitionSeeds";
+import { NATIONS, NATION_IDS, divisionIdFor, divisionNameFor, nationFor } from "@/data/nations";
 import {
   NameRegistry,
   generateSquad,
@@ -107,21 +108,39 @@ export interface BuildResult {
 export function buildClubsAndPlayers(rng: Rng): BuildResult {
   const clubs: Record<string, Club> = {};
   const players: Record<string, Player> = {};
-  const divisionToClubIds: Record<string, string[]> = {
-    div_premier: [], div_one: [], div_two: [], div_three: [],
-  };
+  // Pre-populate the divisionToClubIds map with every league across
+  // every nation in the world so subsequent .push() calls are safe.
+  const divisionToClubIds: Record<string, string[]> = {};
+  NATIONS.forEach((n) => {
+    n.divisionIds.forEach((id) => { divisionToClubIds[id] = []; });
+  });
   // Single registry across the whole world — guarantees uniqueness for
   // every (firstName, lastName) tuple including youth pool + clubs.
   const registry = new NameRegistry();
 
-  CLUB_SEEDS.forEach((seed) => {
+  // Iterate every seed across every nation. The seeds carry their
+  // own nationId so each club is placed in the right pyramid.
+  const allSeeds = getAllClubSeeds();
+  allSeeds.forEach((seed) => {
     const cRng = rng.fork(`club_${seed.id}`);
     const tier = seed.divisionTier;
-    const division = DIVISION_NAMES[tier];
+    const nationId = seed.nationId ?? NATION_IDS.ENGLAND;
+    const nation = nationFor(nationId);
+    const division = {
+      id: divisionIdFor(nationId, tier),
+      name: divisionNameFor(nationId, tier),
+    };
     const strength = strengthTierFor(seed);
 
-    // Squad
-    const squad = generateSquad(seed.id, tier, strength, cRng.fork("squad"), registry);
+    // Squad — biased toward the nation's home name pool so Italian
+    // clubs get Italian-flavoured names, Spanish clubs Spanish names,
+    // etc. The match engine doesn't care about nationality but the
+    // user definitely notices if Roma's roster is full of "Harry
+    // Smith"s.
+    const squad = generateSquad(
+      seed.id, tier, strength, cRng.fork("squad"), registry,
+      { homeNationalityId: nation.nameNationalityId },
+    );
 
     // Squad ratings
     const sortedByOverall = [...squad].sort((a, b) => b.overall - a.overall);
@@ -165,7 +184,8 @@ export function buildClubsAndPlayers(rng: Rng): BuildResult {
       name: displayName,
       shortName: displayShort,
       city: displayCity,
-      country: "Albion",
+      country: nation.name,
+      nationId: nation.id,
       divisionId: division.id,
       crestSprite: sprite?.crestSprite,
       badge: {

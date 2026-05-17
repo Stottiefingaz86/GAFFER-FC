@@ -7,8 +7,9 @@ import { TeamCrest } from "@/components/game/TeamCrest";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { PlayerLink } from "@/components/game/PlayerLink";
 import { useGame } from "@/store/gameStore";
-import { DIVISION_NAMES } from "@/data/competitionSeeds";
-import type { Club, Player } from "@/types/game";
+import { NATIONS, REGIONS, divisionTierFor, NATION_IDS } from "@/data/nations";
+import { NationFlag } from "@/components/game/NationFlag";
+import type { Club, Nation, NationRegion, Player } from "@/types/game";
 
 export default function LeaguePage() {
   return (
@@ -25,27 +26,58 @@ function LeagueInner() {
   const userClub = useGame((s) => s.getUserClub)()!;
   const nextFx = useGame((s) => s.getNextUserFixture)();
   const [tab, setTab] = useState<LeagueTab>("table");
+  // Default the nation tab to the user's club's nation. Allows
+  // browsing other nations' pyramids without leaving this screen.
+  const userNationId = userClub.nationId ?? NATION_IDS.ENGLAND;
+  const [nationId, setNationId] = useState<string>(userNationId);
+  const nation = useMemo(
+    () => NATIONS.find((n) => n.id === nationId) ?? NATIONS[0],
+    [nationId],
+  );
   const [divisionId, setDivisionId] = useState<string>(userClub.divisionId);
 
-  const divisions = ([1, 2, 3, 4] as const).map((tier) => DIVISION_NAMES[tier]);
-  const division = Object.values(DIVISION_NAMES).find((d) => d.id === divisionId)!;
-  const table = db.tables[divisionId];
+  // Whenever the user switches nation, default the division to that
+  // nation's top flight (otherwise the previous nation's id stays
+  // selected and `db.tables[divisionId]` becomes undefined).
+  const sameNation = nation.divisionIds.includes(divisionId);
+  const effectiveDivisionId = sameNation ? divisionId : nation.divisionIds[0];
+
+  const divisions = nation.divisionIds.map((id, idx) => ({
+    id,
+    name: nation.divisionNames[idx],
+    short: nation.divisionShortNames[idx],
+  }));
+  const division = divisions.find((d) => d.id === effectiveDivisionId)!;
+  const table = db.tables[effectiveDivisionId];
   const fixtures = db.fixtures
-    .filter((f) => f.competitionId === divisionId)
+    .filter((f) => f.competitionId === effectiveDivisionId)
     .sort((a, b) => a.week - b.week);
 
-  // Coloured zone strips on the left edge of each row.
+  // Hide nation tabs that have no data in this save — old single-
+  // nation English saves shouldn't show empty Italian / Spanish /
+  // German / Scottish tabs because those leagues weren't generated
+  // before the multi-nation update. New saves have all five.
+  const visibleNations = useMemo(
+    () => NATIONS.filter((n) => n.divisionIds.some((id) => db.tables[id])),
+    [db.tables],
+  );
+
+  // Coloured zone strips on the left edge of each row. Driven by
+  // tier, not by hard-coded English division ids — every nation
+  // has the same pyramid shape so the rules port directly.
   const zoneFor = (idx: number, divId: string) => {
-    if (divId === "div_premier") {
+    const lookup = divisionTierFor(divId);
+    const tier = lookup?.tier ?? 1;
+    if (tier === 1) {
       if (idx < 4) return { color: "var(--ss-accent)", title: "Champions Cup" };
       if (idx < 6) return { color: "var(--ss-btn-info)", title: "Continental Cup" };
       if (idx >= 17) return { color: "var(--ss-btn-exit)", title: "Relegation" };
       return null;
     }
-    if (divId === "div_one" || divId === "div_two") {
+    if (tier === 2 || tier === 3) {
       if (idx < 2) return { color: "var(--ss-btn-stat)", title: "Auto Promotion" };
       if (idx < 6) return { color: "var(--ss-accent)", title: "Playoff" };
-      if (idx >= (divId === "div_one" ? 17 : 16)) return { color: "var(--ss-btn-exit)", title: "Relegation" };
+      if (idx >= (tier === 2 ? 17 : 16)) return { color: "var(--ss-btn-exit)", title: "Relegation" };
       return null;
     }
     if (idx < 3) return { color: "var(--ss-btn-stat)", title: "Auto Promotion" };
@@ -54,13 +86,30 @@ function LeagueInner() {
     return null;
   };
 
-  const userPos = table.rows.findIndex((r) => r.clubId === userClub.id) + 1;
+  const userPos = table ? table.rows.findIndex((r) => r.clubId === userClub.id) + 1 : 0;
   const opp = nextFx
     ? db.clubs[nextFx.homeId === userClub.id ? nextFx.awayId : nextFx.homeId]
     : null;
 
   return (
     <div className="space-y-3">
+      {/* Nation switcher — browse any registered nation's pyramid.
+          Hidden when the save only has one nation (old English saves).
+          When >6 nations are visible we add a region filter row above
+          the nation tabs so the bar doesn't run off-screen. */}
+      {visibleNations.length > 1 && (
+        <NationSwitcher
+          visibleNations={visibleNations}
+          nationId={nationId}
+          userNationId={userNationId}
+          onPick={(id) => {
+            setNationId(id);
+            const picked = visibleNations.find((n) => n.id === id);
+            if (picked) setDivisionId(picked.divisionIds[0]);
+          }}
+        />
+      )}
+
       {/* Division switcher */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="tabbar">
@@ -68,7 +117,7 @@ function LeagueInner() {
             <button
               key={d.id}
               onClick={() => setDivisionId(d.id)}
-              className={`tab ${divisionId === d.id ? "active" : ""}`}
+              className={`tab ${effectiveDivisionId === d.id ? "active" : ""}`}
             >
               {d.short}
             </button>
@@ -89,7 +138,7 @@ function LeagueInner() {
         </div>
 
         {tab === "stats" ? (
-          <LeagueStatsPanel db={db} divisionId={divisionId} />
+          <LeagueStatsPanel db={db} divisionId={effectiveDivisionId} />
         ) : tab === "table" ? (
           <>
             {/* Column headers */}
@@ -108,10 +157,14 @@ function LeagueInner() {
 
             {/* Rows */}
             <div className="overflow-auto scrollbar-thin">
-              {table.rows.map((row, i) => {
+              {!table ? (
+                <div className="px-4 py-8 text-center text-[color:var(--muted)] text-xs uppercase tracking-[0.16em]">
+                  No data for this league yet.
+                </div>
+              ) : table.rows.map((row, i) => {
                 const club = db.clubs[row.clubId];
                 const me = club.id === userClub.id;
-                const zone = zoneFor(i, divisionId);
+                const zone = zoneFor(i, effectiveDivisionId);
                 const rowBg = me ? "var(--ss-row-user)" : i % 2 === 0 ? "var(--ss-row)" : "var(--ss-row-2)";
 
                 return (
@@ -507,4 +560,72 @@ function ordinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// =====================================================================
+// NationSwitcher — region-aware nation tab bar. Once we have more than
+// 6 nations in the save, we surface a region-filter row above the
+// nation tabs (Sensible-Soccer-style) so the bar doesn't sprawl
+// horizontally. With <=6 we just render the flat nation list, since
+// filtering by region adds clutter without payoff.
+// =====================================================================
+function NationSwitcher({
+  visibleNations,
+  nationId,
+  userNationId,
+  onPick,
+}: {
+  visibleNations: Nation[];
+  nationId: string;
+  userNationId: string;
+  onPick: (id: string) => void;
+}) {
+  const showRegionFilter = visibleNations.length > 6;
+  const [region, setRegion] = useState<NationRegion | "all">("all");
+
+  const regionsInPlay = REGIONS.filter((r) =>
+    visibleNations.some((n) => n.region === r.id),
+  );
+  const filteredNations = region === "all"
+    ? visibleNations
+    : visibleNations.filter((n) => n.region === region);
+
+  return (
+    <div className="space-y-1.5">
+      {showRegionFilter && (
+        <div className="tabbar overflow-x-auto scrollbar-thin">
+          <button
+            onClick={() => setRegion("all")}
+            className={`tab whitespace-nowrap text-[10px] ${region === "all" ? "active" : ""}`}
+          >
+            ALL
+          </button>
+          {regionsInPlay.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setRegion(r.id)}
+              className={`tab whitespace-nowrap text-[10px] ${region === r.id ? "active" : ""}`}
+            >
+              {r.shortLabel.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="tabbar overflow-x-auto scrollbar-thin">
+        {filteredNations.map((n) => (
+          <button
+            key={n.id}
+            onClick={() => onPick(n.id)}
+            className={`tab whitespace-nowrap flex items-center gap-1.5 ${nationId === n.id ? "active" : ""}`}
+          >
+            <NationFlag nation={n} size={14} />
+            <span>{n.shortName}</span>
+            {n.id === userNationId ? (
+              <span className="text-[8px] text-[color:var(--ss-accent)] ml-1">★</span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }

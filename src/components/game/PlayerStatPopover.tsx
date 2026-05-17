@@ -41,6 +41,11 @@ interface Props {
   /** Fired when the user clicks the "Send Scout" CTA. Only relevant
    * when `isScouted` is false. */
   onSendScout?: () => void;
+  /** £ cost to scout this player. Optional — when supplied we surface
+   * it inline so the user knows what they're spending. */
+  scoutCost?: number;
+  /** False when the user's club can't afford the scout fee. */
+  canAffordScout?: boolean;
   onClose: () => void;
   onViewFullProfile?: () => void;
   onBench?: () => void;
@@ -110,6 +115,8 @@ export function PlayerStatPopover({
   isCaptain,
   isScouted = true,
   onSendScout,
+  scoutCost,
+  canAffordScout = true,
   onClose,
   onViewFullProfile,
   onBench,
@@ -306,13 +313,42 @@ export function PlayerStatPopover({
               Send a scout to reveal attributes,
               <br />
               condition, and valuation.
+              {typeof scoutCost === "number" && scoutCost > 0 && (
+                <>
+                  <br />
+                  <span className="text-[color:var(--ss-accent)]">
+                    Cost: {formatValue(scoutCost)}
+                  </span>
+                  {!canAffordScout && (
+                    <span className="ml-1 text-[color:var(--ss-btn-exit)]">
+                      · over budget
+                    </span>
+                  )}
+                </>
+              )}
             </p>
             {onSendScout && (
               <button
-                onClick={onSendScout}
-                className="btn btn-stat mt-3 px-4 h-8 text-[10px] uppercase tracking-[0.16em]"
+                onClick={
+                  typeof scoutCost === "number" && scoutCost > 0 && !canAffordScout
+                    ? undefined
+                    : onSendScout
+                }
+                disabled={
+                  typeof scoutCost === "number" && scoutCost > 0 && !canAffordScout
+                }
+                className="btn btn-stat mt-3 px-4 h-8 text-[10px] uppercase tracking-[0.16em] disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  typeof scoutCost === "number" && scoutCost > 0 && !canAffordScout
+                    ? "Your club can't cover this scouting fee"
+                    : typeof scoutCost === "number" && scoutCost > 0
+                      ? `Pay ${formatValue(scoutCost)} to scout this player`
+                      : "Send a scout to file a report"
+                }
               >
-                ▸ Send Scout
+                {typeof scoutCost === "number" && scoutCost > 0
+                  ? `▸ Scout · ${formatValue(scoutCost)}`
+                  : "▸ Send Scout"}
               </button>
             )}
           </div>

@@ -20,6 +20,7 @@ import type {
 } from "@/types/game";
 import { clamp, type Rng } from "@/lib/rng";
 import { FORMATIONS } from "@/data/formations";
+import { divisionTierFor } from "@/data/nations";
 
 // =====================================================================
 // SHAPE QUALITY — judges whether a lineup is *coherent* on top of being
@@ -671,7 +672,11 @@ export function simulateMatch(
 
   // Money / mood / confidence deltas
   const attendance = Math.round(home.stadium.capacity * (0.55 + rng.next() * 0.4));
-  const ticketRevenue = attendance * (home.divisionId === "div_premier" ? 35 : home.divisionId === "div_one" ? 22 : home.divisionId === "div_two" ? 15 : 10);
+  // Ticket pricing scales with the division's tier — works the same
+  // way for every nation in the world.
+  const homeTier = divisionTierFor(home.divisionId)?.tier ?? 1;
+  const ticketPerSeat = homeTier === 1 ? 35 : homeTier === 2 ? 22 : homeTier === 3 ? 15 : 10;
+  const ticketRevenue = attendance * ticketPerSeat;
 
   const homeMood = winnerSide === "home" ? 4 : winnerSide === "draw" ? 0 : -3;
   const awayMood = winnerSide === "away" ? 3 : winnerSide === "draw" ? 0 : -2;

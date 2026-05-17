@@ -11,19 +11,23 @@ import type {
   ManagerSeasonRecord,
   Trophy,
 } from "@/types/game";
-import { COMP_IDS, DIVISION_NAMES } from "@/data/competitionSeeds";
+import { COMP_IDS } from "@/data/competitionSeeds";
+import { divisionTierFor, nationOfCompetition } from "@/data/nations";
 
-/** Pretty label for a competition id (used in inbox/awards copy). */
+/** Pretty label for a competition id (used in inbox/awards copy).
+ *  Works for every nation's pyramid by looking up nation + tier. */
 export function competitionLabel(id: string): string {
-  if (id === COMP_IDS.PREMIER) return DIVISION_NAMES[1].name;
-  if (id === COMP_IDS.D1) return DIVISION_NAMES[2].name;
-  if (id === COMP_IDS.D2) return DIVISION_NAMES[3].name;
-  if (id === COMP_IDS.D3) return DIVISION_NAMES[4].name;
-  if (id === COMP_IDS.NATIONAL_CUP) return "National Cup";
-  if (id === COMP_IDS.LEAGUE_CUP) return "League Cup";
+  const lookup = divisionTierFor(id);
+  if (lookup) {
+    const nation = nationOfCompetition(id);
+    return nation ? nation.divisionNames[lookup.tier - 1] : id;
+  }
+  const nation = nationOfCompetition(id);
+  if (nation?.nationalCupId === id) return nation.nationalCupName;
+  if (nation?.leagueCupId === id) return nation.leagueCupName;
+  if (nation?.superCupId === id) return nation.superCupName;
   if (id === COMP_IDS.CHAMPIONS_CUP) return "Champions Cup";
   if (id === COMP_IDS.CONTINENTAL_CUP) return "Continental Cup";
-  if (id === COMP_IDS.SUPER_SHIELD) return "Super Shield";
   return id;
 }
 
@@ -49,8 +53,12 @@ export function stampSeasonHistory(
 ): UserSeasonStamp | null {
   let userStamp: UserSeasonStamp | null = null;
 
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const divisionId = DIVISION_NAMES[tier].id;
+  // Walk every league across every nation in the world. With 5
+  // nations × 4 tiers = up to 20 division stamps per season.
+  Object.keys(db.tables).forEach((divisionId) => {
+    const lookup = divisionTierFor(divisionId);
+    if (!lookup) return;
+    const tier = lookup.tier;
     const table = db.tables[divisionId];
     if (!table) return;
 
@@ -89,7 +97,6 @@ export function stampSeasonHistory(
         });
       }
 
-      // Mutate the club history.
       const history = club.history ?? { trophies: [], seasons: [] };
       const updated: Club = {
         ...club,
@@ -100,7 +107,6 @@ export function stampSeasonHistory(
       };
       db.clubs[club.id] = updated;
 
-      // If this is the user's club, build their manager stamp.
       if (club.id === userClubId) {
         userStamp = buildUserStamp(
           updated,

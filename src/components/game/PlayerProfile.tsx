@@ -37,6 +37,15 @@ interface Props {
   /** Fired when the user clicks the "Send Scout" CTA from inside the
    * profile (only relevant when `isScouted` is false). */
   onSendScout?: () => void;
+  /** £ cost to scout this player. Displayed inside the CTA so the user
+   * knows what the click will spend before they commit. Optional —
+   * legacy callers that haven't been updated yet just show "Send Scout"
+   * with no price tag. */
+  scoutCost?: number;
+  /** False when the user can't afford the scout fee. We still render
+   * the CTA so the cost is visible, but greyed-out + unclickable so
+   * the user knows it's the budget, not a missing feature. */
+  canAffordScout?: boolean;
   /** Action handlers — if absent the corresponding button still renders
    * but is disabled with a "Phase 2" hint, so the user can SEE the
    * action exists even before its system is built. */
@@ -84,6 +93,8 @@ export function PlayerProfile({
   ownPlayer,
   isScouted = true,
   onSendScout,
+  scoutCost,
+  canAffordScout = true,
   onNewContract,
   onSell,
   onMakeBid,
@@ -344,7 +355,11 @@ export function PlayerProfile({
         // detail panels with an explanation + "Send Scout" CTA. Bio
         // (nationality + DOB) stays visible above; everything else is
         // deliberately hidden.
-        <ScoutPrompt onSendScout={onSendScout} />
+        <ScoutPrompt
+          onSendScout={onSendScout}
+          scoutCost={scoutCost}
+          canAfford={canAffordScout}
+        />
       )}
 
       {/* Action bar — defaults to a contextual set if no override given */}
@@ -651,7 +666,17 @@ function AttrRow({
 // attributes, transfer interest, finance) when the user hasn't filed
 // a scout report on this player yet.
 // =====================================================================
-function ScoutPrompt({ onSendScout }: { onSendScout?: () => void }) {
+function ScoutPrompt({
+  onSendScout,
+  scoutCost,
+  canAfford = true,
+}: {
+  onSendScout?: () => void;
+  scoutCost?: number;
+  canAfford?: boolean;
+}) {
+  const hasCost = typeof scoutCost === "number" && scoutCost > 0;
+  const disabled = hasCost && !canAfford;
   return (
     <>
       <div className="bg-[color:var(--ss-bar-2)] text-[color:var(--ss-bar-text)] px-3 py-1 text-[10px] uppercase tracking-[0.16em] font-extrabold text-center border-y border-[color:var(--ss-bar-edge)]">
@@ -667,13 +692,36 @@ function ScoutPrompt({ onSendScout }: { onSendScout?: () => void }) {
         <p className="text-[11px] tracking-[0.04em] text-[color:var(--muted)] max-w-sm mx-auto leading-relaxed">
           Send a scout to watch this player. They&apos;ll come back with
           attributes, condition, valuation and any transfer interest.
+          {hasCost && (
+            <>
+              <br />
+              <span className="text-[color:var(--ss-accent)]">
+                Cost: {formatValue(scoutCost!)}
+              </span>
+              {!canAfford && (
+                <span className="ml-1 text-[color:var(--ss-btn-exit)]">
+                  · over budget
+                </span>
+              )}
+            </>
+          )}
         </p>
         {onSendScout && (
           <button
-            onClick={onSendScout}
-            className="btn btn-stat mt-4 px-5 h-10 text-xs uppercase tracking-[0.16em]"
+            onClick={disabled ? undefined : onSendScout}
+            disabled={disabled}
+            className="btn btn-stat mt-4 px-5 h-10 text-xs uppercase tracking-[0.16em] disabled:opacity-40 disabled:cursor-not-allowed"
+            title={
+              disabled
+                ? "Your club can't cover this scouting fee"
+                : hasCost
+                  ? `Pay ${formatValue(scoutCost!)} to scout this player`
+                  : "Send a scout to file a report"
+            }
           >
-            ▸ Send Scout
+            {hasCost
+              ? `▸ Send Scout · ${formatValue(scoutCost!)}`
+              : "▸ Send Scout"}
           </button>
         )}
       </div>

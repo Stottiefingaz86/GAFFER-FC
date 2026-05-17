@@ -4,10 +4,23 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { CLUB_SEEDS, strengthLabelFor, strengthTierFor, type StrengthTier } from "@/data/clubSeeds";
-import { DIVISION_NAMES } from "@/data/competitionSeeds";
+import {
+  getClubSeedsForNation,
+  strengthLabelFor,
+  strengthTierFor,
+  type StrengthTier,
+} from "@/data/clubSeeds";
+import {
+  NATIONS,
+  NATION_IDS,
+  REGIONS,
+  divisionNameFor,
+  divisionShortNameFor,
+} from "@/data/nations";
+import type { NationRegion } from "@/types/game";
 import { TeamCrest } from "@/components/game/TeamCrest";
 import { Kit } from "@/components/game/Kit";
+import { NationFlag } from "@/components/game/NationFlag";
 import { useGame } from "@/store/gameStore";
 import { buildClubsAndPlayers } from "@/generators/teamGenerator";
 import { createRng } from "@/lib/rng";
@@ -22,26 +35,47 @@ const DIFFICULTY_LABEL: Record<1 | 2 | 3 | 4, string> = {
   4: "Legendary",
 };
 
+type Step = "nation" | "club";
+
 export default function CareerNewPage() {
+  const [step, setStep] = useState<Step>("nation");
+  const [regionFilter, setRegionFilter] = useState<NationRegion | "all">("all");
+  const [nationId, setNationId] = useState<string>(NATION_IDS.ENGLAND);
   const [tier, setTier] = useState<1 | 2 | 3 | 4>(2);
   const [managerName, setManagerName] = useState("");
   const [selectedClubId, setSelectedClubId] = useState<string | null>(null);
   const startCareer = useGame((s) => s.startNewCareer);
   const router = useRouter();
 
-  // Use the canonical world seed so the preview the player sees IS the
-  // exact world they'll spawn into when they hit "Begin career". No
-  // more "I picked Liverpool but got a totally different squad".
+  // Build the full world ONCE so previewed clubs match what
+  // `startCareer` will spawn. The world is huge (5 nations × 80
+  // clubs) but it's only paid for on the career-create screen, and
+  // the same canonical seed makes it stable.
   const preview = useMemo(() => {
     const rng = createRng(WORLD_SEED);
     return buildClubsAndPlayers(rng);
   }, []);
 
+  // Map of nation seeds — one per nation. Used to resolve a club's
+  // strengthTier (only the seed knows that, not the generated club).
+  const seedsByNation = useMemo(() => {
+    const map: Record<string, ReturnType<typeof getClubSeedsForNation>> = {};
+    NATIONS.forEach((n) => { map[n.id] = getClubSeedsForNation(n.id); });
+    return map;
+  }, []);
+
+  const seedById = useMemo(() => {
+    const map: Record<string, ReturnType<typeof getClubSeedsForNation>[number]> = {};
+    Object.values(seedsByNation).flat().forEach((s) => { map[s.id] = s; });
+    return map;
+  }, [seedsByNation]);
+
   const clubsByTier = useMemo(() => {
     const map: Record<1 | 2 | 3 | 4, Club[]> = { 1: [], 2: [], 3: [], 4: [] };
     Object.values(preview.clubs).forEach((c) => {
-      const seed = CLUB_SEEDS.find((s) => s.id === c.id);
-      const t = seed?.divisionTier ?? 1;
+      if (c.nationId !== nationId) return;
+      const seed = seedById[c.id];
+      const t = (seed?.divisionTier ?? 1) as 1 | 2 | 3 | 4;
       map[t].push(c);
     });
     const STRENGTH_ORDER: Record<StrengthTier, number> = {
@@ -49,8 +83,8 @@ export default function CareerNewPage() {
     };
     (Object.keys(map) as unknown as (1 | 2 | 3 | 4)[]).forEach((k) => {
       map[k].sort((a, b) => {
-        const sa = strengthTierFor(CLUB_SEEDS.find((s) => s.id === a.id)!);
-        const sb = strengthTierFor(CLUB_SEEDS.find((s) => s.id === b.id)!);
+        const sa = strengthTierFor(seedById[a.id]!);
+        const sb = strengthTierFor(seedById[b.id]!);
         if (STRENGTH_ORDER[sa] !== STRENGTH_ORDER[sb]) {
           return STRENGTH_ORDER[sa] - STRENGTH_ORDER[sb];
         }
@@ -58,7 +92,7 @@ export default function CareerNewPage() {
       });
     });
     return map;
-  }, [preview]);
+  }, [preview, nationId, seedById]);
 
   const selectedClub = selectedClubId ? preview.clubs[selectedClubId] : null;
   const selectedSquad = selectedClub
@@ -68,11 +102,12 @@ export default function CareerNewPage() {
   const selectedStar = selectedSquad.length
     ? [...selectedSquad].sort((a, b) => b.overall - a.overall)[0]
     : null;
+  const nation = NATIONS.find((n) => n.id === nationId)!;
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedClubId(null);
-  }, [tier]);
+  }, [tier, nationId]);
 
   const begin = () => {
     if (!selectedClubId || !managerName.trim()) return;
@@ -80,11 +115,116 @@ export default function CareerNewPage() {
     router.push("/dashboard");
   };
 
+  // ===== NATION PICKER STEP ============================================
+  if (step === "nation") {
+    return (
+      <div className="min-h-dvh px-3 sm:px-4 py-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <Link href="/" className="btn btn-action text-xs">← Menu</Link>
+            <div className="flex items-center gap-2 flex-1 justify-end">
+              <label className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--ss-cream)]">Manager</label>
+              <input
+                value={managerName}
+                onChange={(e) => setManagerName(e.target.value)}
+                placeholder="e.g. Jamie Calloway"
+                className="block w-full max-w-xs text-sm scoreboard"
+              />
+            </div>
+          </div>
+
+          <div className="panel overflow-hidden mb-3">
+            <div className="panel-bar text-base sm:text-lg">Step 1 · Choose Your Nation</div>
+            <div className="bg-[color:var(--ss-bg-2)] px-4 py-3 text-[12px] uppercase tracking-[0.12em] text-[color:var(--ss-cream)]">
+              Pick the football pyramid you want to manage in. Every nation runs its
+              own four-tier league + domestic cups. The continental Champions Cup pulls
+              the top 4 from <em>every</em> nation each season.
+            </div>
+
+            {/* Region filter — like Sensible Soccer's continent picker */}
+            <div className="flex flex-wrap gap-1 px-3 py-2 bg-[color:var(--ss-bg-2)] border-t border-[color:var(--ss-bar-edge)]">
+              <button
+                onClick={() => setRegionFilter("all")}
+                className={`tab text-[10px] px-3 py-1.5 ${regionFilter === "all" ? "tab-active" : ""}`}
+              >
+                ALL · {NATIONS.length}
+              </button>
+              {REGIONS.map((r) => {
+                const count = NATIONS.filter((n) => n.region === r.id).length;
+                if (count === 0) return null;
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => setRegionFilter(r.id)}
+                    className={`tab text-[10px] px-3 py-1.5 ${regionFilter === r.id ? "tab-active" : ""}`}
+                  >
+                    {r.shortLabel.toUpperCase()} · {count}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
+              {NATIONS.filter((n) => regionFilter === "all" || n.region === regionFilter)
+                .map((n, i) => {
+                  const selected = nationId === n.id;
+                  const bg = selected
+                    ? "var(--ss-row-sel)"
+                    : i % 2 === 0 ? "var(--ss-row)" : "var(--ss-row-2)";
+                  const regionLabel = REGIONS.find((r) => r.id === n.region)?.shortLabel ?? "";
+                  return (
+                    <button
+                      key={n.id}
+                      onClick={() => setNationId(n.id)}
+                      className="grid grid-cols-[48px_1fr_auto] items-center gap-3 px-4 py-3 text-left text-white"
+                      style={{
+                        background: bg,
+                        boxShadow: selected ? "inset 4px 0 0 0 var(--ss-accent)" : undefined,
+                      }}
+                    >
+                      <NationFlag nation={n} size={32} />
+                      <div className="min-w-0">
+                        <div className="text-[14px] font-extrabold uppercase tracking-[0.04em] truncate flex items-center gap-2">
+                          {n.name}
+                          <span className="text-[8px] tracking-[0.18em] opacity-60 font-bold">
+                            {regionLabel}
+                          </span>
+                        </div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] opacity-80 truncate">
+                          {n.divisionNames[0]} · {n.nationalCupName}
+                        </div>
+                      </div>
+                      <div className="scoreboard text-[12px] font-extrabold text-[color:var(--ss-accent)]">
+                        {selected ? "▶ SELECTED" : ""}
+                      </div>
+                    </button>
+                  );
+                })}
+            </div>
+            <div className="px-4 py-3 bg-[color:var(--ss-bg-deep)] flex items-center justify-between gap-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--ss-cream)]">
+                <span className="text-[color:var(--ss-accent)] mr-1">▸</span>
+                Selected: <strong>{nation.name}</strong> · 80 clubs · 4 divisions
+              </div>
+              <button
+                onClick={() => setStep("club")}
+                className="btn btn-stat text-xs"
+              >
+                Next: Pick A Club ▶
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ===== CLUB PICKER STEP =============================================
   return (
     <div className="min-h-dvh px-3 sm:px-4 py-6">
       <div className="mx-auto max-w-6xl">
         <div className="flex items-center justify-between gap-4 mb-4">
-          <Link href="/" className="btn btn-action text-xs">← Menu</Link>
+          <button onClick={() => setStep("nation")} className="btn btn-action text-xs">← Change Nation</button>
           <div className="flex items-center gap-2 flex-1 justify-end">
             <label className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--ss-cream)]">Manager</label>
             <input
@@ -97,7 +237,10 @@ export default function CareerNewPage() {
         </div>
 
         <div className="panel overflow-hidden mb-3">
-          <div className="panel-bar text-base sm:text-lg">Start a New Career</div>
+          <div className="panel-bar text-base sm:text-lg flex items-center gap-2">
+            <NationFlag nation={nation} size={20} />
+            <span>Step 2 · Choose Your Club ({nation.name})</span>
+          </div>
           <div className="bg-[color:var(--ss-bg-deep)] flex flex-wrap gap-0">
             {([1, 2, 3, 4] as const).map((t) => (
               <button
@@ -105,7 +248,7 @@ export default function CareerNewPage() {
                 onClick={() => setTier(t)}
                 className={`tab flex-1 ${tier === t ? "active" : ""}`}
               >
-                {DIVISION_NAMES[t].short} · {DIFFICULTY_LABEL[t]}
+                {divisionShortNameFor(nationId, t)} · {DIFFICULTY_LABEL[t]}
               </button>
             ))}
           </div>
@@ -113,10 +256,10 @@ export default function CareerNewPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-3">
           <div className="panel overflow-hidden">
-            <div className="panel-bar text-sm">Clubs in {DIVISION_NAMES[tier].name}</div>
+            <div className="panel-bar text-sm">Clubs in {divisionNameFor(nationId, tier)}</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-0 max-h-[600px] overflow-auto scrollbar-thin">
               {clubsByTier[tier].map((c, i) => {
-                const seed = CLUB_SEEDS.find((s) => s.id === c.id);
+                const seed = seedById[c.id];
                 const strength: StrengthTier = seed ? strengthTierFor(seed) : "mid";
                 const selected = selectedClubId === c.id;
                 const bg = selected
@@ -173,10 +316,11 @@ export default function CareerNewPage() {
                   </div>
                   <div className="relative z-[1] min-w-0">
                     <div
-                      className="text-[10px] uppercase tracking-[0.16em] opacity-90"
+                      className="text-[10px] uppercase tracking-[0.16em] opacity-90 flex items-center gap-1.5"
                       style={{ textShadow: "0 1px 2px rgba(0,0,0,0.55)" }}
                     >
-                      {DIVISION_NAMES[tier].short} · {DIFFICULTY_LABEL[tier]} · EST {selectedClub.badge.foundingYear}
+                      <NationFlag nation={nation} size={12} />
+                      <span>{divisionShortNameFor(nationId, tier)} · {DIFFICULTY_LABEL[tier]} · EST {selectedClub.badge.foundingYear}</span>
                     </div>
                     <div
                       className="text-[14px] font-extrabold uppercase tracking-[0.04em] mt-0.5 truncate"
@@ -185,11 +329,8 @@ export default function CareerNewPage() {
                       {selectedClub.city}
                     </div>
                     {(() => {
-                      const seed = CLUB_SEEDS.find((s) => s.id === selectedClub.id);
+                      const seed = seedById[selectedClub.id];
                       const strength: StrengthTier = seed ? strengthTierFor(seed) : "mid";
-                      // Selected club detail panel — pull divisionTier
-                      // from the seed so we get the right "European
-                      // Places" / "Promotion Contender" wording.
                       const dt = (seed?.divisionTier ?? tier) as 1 | 2 | 3 | 4;
                       return <span className="mt-1.5 inline-block"><StrengthChip tier={strength} divisionTier={dt} /></span>;
                     })()}
@@ -320,8 +461,6 @@ function StrengthChip({
   divisionTier,
 }: {
   tier: StrengthTier;
-  /** Division this club plays in. Drives the wording — "European Places"
-   * in the top flight vs. "Promotion Contender" elsewhere. */
   divisionTier: 1 | 2 | 3 | 4;
 }) {
   const s = STRENGTH_CHIP_STYLE[tier];

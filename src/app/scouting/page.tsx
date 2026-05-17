@@ -7,11 +7,22 @@ import { Flag } from "@/components/game/Flag";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { PlayerProfile } from "@/components/game/PlayerProfile";
 import { TeamCrest } from "@/components/game/TeamCrest";
+import { toast } from "@/components/game/Toaster";
 import { useGame } from "@/store/gameStore";
-import type { Club, Player, Position } from "@/types/game";
+import type {
+  Club,
+  GameDatabase,
+  Player,
+  Position,
+  Scout,
+  ScoutFocusPos,
+  ScoutReport,
+} from "@/types/game";
 import { motion, AnimatePresence } from "framer-motion";
 import { formatValue } from "@/lib/playerValue";
 import { FREE_AGENT_CLUB_ID } from "@/generators/playerGenerator";
+import { NATIONS_BY_ID } from "@/data/nations";
+import { nationalityLabel } from "@/data/nationalityFlags";
 
 const FILTERS = ["All", "Wonderkids", "GK", "DEF", "MID", "FWD", "U17", "U19"] as const;
 type FilterKey = typeof FILTERS[number];
@@ -19,7 +30,7 @@ type FilterKey = typeof FILTERS[number];
 const SORTS = ["Potential", "Overall", "Age", "Hype"] as const;
 type SortKey = typeof SORTS[number];
 
-type Tab = "watchlist" | "youth";
+type Tab = "watchlist" | "youth" | "scouts" | "recommendations";
 
 export default function ScoutingPage() {
   return (
@@ -38,8 +49,23 @@ function ScoutingInner() {
   // the app, removing from this page, etc.
   const scoutedIds = useGame((s) => s.career?.scoutedPlayerIds);
   const unscoutPlayer = useGame((s) => s.unscoutPlayer);
+  // Phase-2 scout staff + reports — subscribe directly so the page
+  // refreshes the moment a scout is hired/fired or a weekly digest
+  // lands.
+  const scouts = useGame((s) => s.career?.scouts ?? []);
+  const scoutMarket = useGame((s) => s.career?.scoutMarket ?? []);
+  const scoutReports = useGame((s) => s.career?.scoutReports ?? []);
+  const hireScout = useGame((s) => s.hireScout);
+  const fireScout = useGame((s) => s.fireScout);
+  const refreshScoutMarket = useGame((s) => s.refreshScoutMarket);
+  const dismissScoutReport = useGame((s) => s.dismissScoutReport);
+  const markScoutReportSeen = useGame((s) => s.markScoutReportSeen);
 
-  const [tab, setTab] = useState<Tab>("watchlist");
+  // Default tab biases toward unread recommendations — the user only
+  // notices the new scouting flow if it surfaces what the scouts have
+  // produced immediately on entry.
+  const unreadReports = scoutReports.filter((r) => !r.seen).length;
+  const [tab, setTab] = useState<Tab>(unreadReports > 0 ? "recommendations" : "watchlist");
   const [filter, setFilter] = useState<FilterKey>("Wonderkids");
   const [sort, setSort] = useState<SortKey>("Potential");
   const [search, setSearch] = useState("");
@@ -118,10 +144,34 @@ function ScoutingInner() {
 
   return (
     <div className="space-y-3">
-      {/* Top-level tab strip — Watchlist (the user's saved scouts)
-       * vs Youth Pool (the implicitly scouted free-agent regens). */}
+      {/* Top-level tab strip — Recommendations (scout-filed reports)
+       * + Scouts (manage your staff) + Watchlist (saved scouts) +
+       * Youth Pool (implicitly scouted free-agent regens). */}
       <div className="panel overflow-hidden">
-        <div className="tabbar !rounded-none">
+        <div className="tabbar !rounded-none flex-wrap">
+          <button
+            onClick={() => setTab("recommendations")}
+            className={`tab flex-1 ${tab === "recommendations" ? "active" : ""}`}
+          >
+            Reports
+            <span
+              className={`ml-1.5 text-[10px] ${
+                unreadReports > 0
+                  ? "text-[color:var(--ss-accent)] font-extrabold"
+                  : "opacity-70"
+              }`}
+            >
+              {scoutReports.length}
+              {unreadReports > 0 ? ` · ${unreadReports} new` : ""}
+            </span>
+          </button>
+          <button
+            onClick={() => setTab("scouts")}
+            className={`tab flex-1 ${tab === "scouts" ? "active" : ""}`}
+          >
+            Scouts
+            <span className="ml-1.5 text-[10px] opacity-70">{scouts.length}</span>
+          </button>
           <button
             onClick={() => setTab("watchlist")}
             className={`tab flex-1 ${tab === "watchlist" ? "active" : ""}`}
@@ -138,6 +188,58 @@ function ScoutingInner() {
           </button>
         </div>
       </div>
+
+      {tab === "recommendations" && (
+        <RecommendationsPanel
+          reports={scoutReports}
+          scouts={scouts}
+          db={db}
+          onOpenPlayer={(id) => setOpenId(id)}
+          onDismiss={dismissScoutReport}
+          onMarkSeen={markScoutReportSeen}
+          onSwitchToScouts={() => setTab("scouts")}
+        />
+      )}
+
+      {tab === "scouts" && (
+        <ScoutsPanel
+          scouts={scouts}
+          market={scoutMarket}
+          budget={userClub?.budget ?? 0}
+          onHire={(id) => {
+            const scout = scoutMarket.find((s) => s.id === id);
+            const result = hireScout(id);
+            if (result.ok) {
+              toast(
+                scout
+                  ? `${scout.name} hired · ${formatValue(scout.signingFee)} paid`
+                  : "Scout hired",
+                "success",
+              );
+            } else if (result.reason === "insufficient") {
+              toast("Insufficient funds for this signing fee", "warn");
+            } else {
+              toast("Could not hire scout", "warn");
+            }
+          }}
+          onFire={(id) => {
+            const scout = scouts.find((s) => s.id === id);
+            fireScout(id);
+            toast(scout ? `${scout.name} released` : "Scout released", "info");
+          }}
+          onRefresh={() => {
+            const result = refreshScoutMarket();
+            if (result.ok) {
+              toast(`Market refreshed · ${formatValue(result.cost)} paid`, "success");
+            } else {
+              toast(
+                `Need ${formatValue(result.cost)} to refresh the market`,
+                "warn",
+              );
+            }
+          }}
+        />
+      )}
 
       {tab === "watchlist" && (
         <WatchlistPanel
@@ -641,5 +743,512 @@ function WatchlistPanel({
         })}
       </ul>
     </div>
+  );
+}
+
+// =====================================================================
+// <RecommendationsPanel /> — scout-filed reports.
+//
+// Every weekly tick can drop new reports here (one row per report).
+// Each row shows the player snippet, the scout's estimated OVR + POT,
+// confidence, and a quick way to jump to the full profile, lodge a
+// bid, or dismiss the report.
+// =====================================================================
+
+function RecommendationsPanel({
+  reports,
+  scouts,
+  db,
+  onOpenPlayer,
+  onDismiss,
+  onMarkSeen,
+  onSwitchToScouts,
+}: {
+  reports: ScoutReport[];
+  scouts: Scout[];
+  db: GameDatabase | null;
+  onOpenPlayer: (id: string) => void;
+  onDismiss: (id: string) => void;
+  onMarkSeen: (id: string) => void;
+  onSwitchToScouts: () => void;
+}) {
+  // Sort newest reports first so the user lands on what's fresh.
+  const sorted = useMemo(
+    () =>
+      [...reports].sort(
+        (a, b) => b.season - a.season || b.week - a.week,
+      ),
+    [reports],
+  );
+
+  if (sorted.length === 0) {
+    return (
+      <div className="panel overflow-hidden">
+        <div className="panel-bar text-base sm:text-lg flex items-center gap-3">
+          <span>Scout Reports</span>
+          <span className="ml-auto text-[10px] tracking-[0.2em] opacity-70">
+            0 filed
+          </span>
+        </div>
+        <div className="bg-[color:var(--ss-bg-2)] py-10 px-4 text-center">
+          <div className="text-[color:var(--ss-accent)] scoreboard text-base mb-2">
+            No reports filed yet
+          </div>
+          <div className="text-[12px] text-white/80 max-w-md mx-auto leading-relaxed">
+            Hire scouts from the{" "}
+            <button
+              type="button"
+              onClick={onSwitchToScouts}
+              className="text-[color:var(--ss-accent)] underline hover:no-underline"
+            >
+              Scouts
+            </button>{" "}
+            tab and they&apos;ll start filing weekly briefings on
+            players from around the world that match their brief.
+          </div>
+          <button
+            type="button"
+            onClick={onSwitchToScouts}
+            className="btn btn-info inline-flex mt-4 text-xs px-4 py-2"
+          >
+            Hire Scouts
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="panel-bar text-base sm:text-lg flex items-center gap-3">
+        <span>Scout Reports</span>
+        <span className="ml-auto text-[10px] tracking-[0.2em] opacity-70">
+          {sorted.length} filed
+        </span>
+      </div>
+      <ul className="divide-y divide-[color:var(--ss-bg-deep)]">
+        {sorted.map((r, i) => {
+          const player = db?.players[r.playerId];
+          const scout = scouts.find((s) => s.id === r.scoutId);
+          if (!player) {
+            // The report still exists but the player has retired or
+            // moved out of the DB — surface a tombstone so the user
+            // can dismiss without crashing on a missing record.
+            return (
+              <li
+                key={r.id}
+                className="px-3 py-2 text-[12px] text-[color:var(--muted)] flex items-center justify-between"
+                style={{ background: i % 2 === 0 ? "var(--ss-row)" : "var(--ss-row-2)" }}
+              >
+                <span>Report on unknown player · W{r.week}</span>
+                <button
+                  type="button"
+                  onClick={() => onDismiss(r.id)}
+                  className="btn btn-exit !rounded-none text-[10px] px-2 py-1"
+                >
+                  ✕
+                </button>
+              </li>
+            );
+          }
+          const club = db?.clubs[player.clubId];
+          return (
+            <li
+              key={r.id}
+              className="grid grid-cols-[44px_1fr_56px_56px_70px] sm:grid-cols-[44px_1fr_140px_56px_56px_70px_200px] items-stretch text-white text-[12px] sm:text-[13px] font-bold uppercase tracking-[0.04em]"
+              style={{
+                background: r.seen
+                  ? i % 2 === 0
+                    ? "var(--ss-row)"
+                    : "var(--ss-row-2)"
+                  : "linear-gradient(90deg, color-mix(in srgb, var(--ss-accent) 24%, var(--ss-row)) 0%, var(--ss-row) 100%)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (!r.seen) onMarkSeen(r.id);
+                  onOpenPlayer(player.id);
+                }}
+                className="px-1 py-2 flex items-center justify-center is-clickable"
+              >
+                <PlayerAvatar playerId={player.id} width={32} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!r.seen) onMarkSeen(r.id);
+                  onOpenPlayer(player.id);
+                }}
+                className="pl-1 pr-3 py-2 flex flex-col justify-center min-w-0 text-left is-clickable hover:opacity-90"
+              >
+                <span className="truncate flex items-center gap-2">
+                  {!r.seen && (
+                    <span className="size-2 rounded-full bg-[color:var(--ss-accent)] animate-pulse" />
+                  )}
+                  <span>{player.firstName} {player.lastName}</span>
+                  <span
+                    className="text-[9px] px-1 py-0.5 leading-tight"
+                    style={{ background: "var(--ss-bg-deep)", color: "var(--ss-accent)" }}
+                  >
+                    {r.summary.toUpperCase()}
+                  </span>
+                </span>
+                <span className="text-[9px] tracking-[0.16em] opacity-80 truncate flex items-center gap-1 mt-0.5">
+                  <Flag nationalityId={player.nationality} width={14} />
+                  <span className="truncate">
+                    {player.age}Y · {player.detailedPosition}
+                    {scout ? ` · scout ${scout.name}` : ""}
+                  </span>
+                </span>
+              </button>
+
+              {club ? (
+                <Link
+                  href={`/club/${club.id}`}
+                  className="hidden sm:flex px-2 py-2 items-center gap-2 min-w-0 is-clickable hover:opacity-90"
+                  title={`View ${club.name}`}
+                >
+                  <TeamCrest club={club} size={22} />
+                  <span className="truncate text-[11px]">{club.shortName}</span>
+                </Link>
+              ) : (
+                <span className="hidden sm:flex px-2 py-2 items-center text-[10px] opacity-60">
+                  Free agent
+                </span>
+              )}
+
+              <span
+                className="px-1 py-2 text-center scoreboard text-[14px] flex flex-col items-center justify-center leading-tight"
+                title={`Estimated overall · ${r.confidence}% confidence`}
+              >
+                <span className="text-[8px] uppercase tracking-[0.18em] opacity-70">EST OVR</span>
+                <span style={{ color: ratingColor(r.estOverall) }}>{r.estOverall}</span>
+              </span>
+
+              <span
+                className="px-1 py-2 text-center scoreboard text-[14px] flex flex-col items-center justify-center leading-tight"
+                title={`Estimated potential · ${r.confidence}% confidence`}
+              >
+                <span className="text-[8px] uppercase tracking-[0.18em] opacity-70">EST POT</span>
+                <span style={{ color: ratingColor(r.estPotential) }}>{r.estPotential}</span>
+              </span>
+
+              <span className="px-2 py-2 flex flex-col items-end justify-center ss-stat">
+                <span className="text-[9px] opacity-80">CONF</span>
+                <span className="scoreboard text-[13px] leading-none">
+                  {r.confidence}%
+                </span>
+              </span>
+
+              <span className="hidden sm:flex items-stretch border-l border-[color:var(--ss-bg-deep)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!r.seen) onMarkSeen(r.id);
+                    onOpenPlayer(player.id);
+                  }}
+                  className="btn btn-action !rounded-none flex-1 text-[10px] px-2 border-0 border-r border-[color:var(--ss-bg-deep)]"
+                >
+                  View
+                </button>
+                <Link
+                  href={`/bid/${player.id}`}
+                  className="btn btn-stat !rounded-none flex-1 text-[10px] px-2 border-0 border-r border-[color:var(--ss-bg-deep)] flex items-center justify-center"
+                  onClick={() => {
+                    if (!r.seen) onMarkSeen(r.id);
+                  }}
+                >
+                  £ Bid
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => onDismiss(r.id)}
+                  className="btn btn-exit !rounded-none flex-1 text-[10px] px-2 border-0"
+                  title="Drop this report"
+                >
+                  ✕
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// =====================================================================
+// <ScoutsPanel /> — manage hired scouts + browse the open market.
+// =====================================================================
+
+const POS_LABEL: Record<ScoutFocusPos, string> = {
+  any: "Any position",
+  GK: "Goalkeepers",
+  DEF: "Defenders",
+  MID: "Midfielders",
+  FWD: "Forwards",
+};
+
+function regionLabel(focusNationId: string): string {
+  if (focusNationId === "global") return "Global";
+  return NATIONS_BY_ID[focusNationId]?.name ?? nationalityLabel(focusNationId);
+}
+
+function tierStars(tier: Scout["tier"]): string {
+  return "★".repeat(tier) + "☆".repeat(5 - tier);
+}
+
+function tierColor(tier: Scout["tier"]): string {
+  if (tier >= 5) return "#FFD000";
+  if (tier === 4) return "#FFE5A0";
+  if (tier === 3) return "#9AF09A";
+  if (tier === 2) return "#A2B0DC";
+  return "#FFFFFF";
+}
+
+function ScoutsPanel({
+  scouts,
+  market,
+  budget,
+  onHire,
+  onFire,
+  onRefresh,
+}: {
+  scouts: Scout[];
+  market: Scout[];
+  budget: number;
+  onHire: (id: string) => void;
+  onFire: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const totalWages = scouts.reduce((sum, s) => sum + s.wage, 0);
+  const sortedMarket = useMemo(
+    () => [...market].sort((a, b) => b.tier - a.tier || b.judging - a.judging),
+    [market],
+  );
+
+  return (
+    <div className="space-y-3">
+      {/* ── Summary strip ─────────────────────────────────────────── */}
+      <div className="panel overflow-hidden">
+        <div className="panel-bar text-sm flex items-center gap-3">
+          <span>Scouting Network</span>
+          <span className="ml-auto text-[10px] tracking-[0.2em] opacity-70">
+            {scouts.length} on staff · {formatValue(totalWages)}/w
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 text-[11px]">
+          <NetCell k="Scouts" v={String(scouts.length)} />
+          <NetCell k="Weekly Wages" v={formatValue(totalWages)} alt />
+          <NetCell k="Tier Avg" v={
+            scouts.length === 0
+              ? "—"
+              : (scouts.reduce((a, s) => a + s.tier, 0) / scouts.length).toFixed(1)
+          } />
+          <NetCell k="Budget" v={formatValue(budget)} alt />
+        </div>
+      </div>
+
+      {/* ── Hired scouts list ────────────────────────────────────── */}
+      <div className="panel overflow-hidden">
+        <div className="panel-bar text-sm">Your Scouts</div>
+        {scouts.length === 0 ? (
+          <div className="bg-[color:var(--ss-bg-2)] py-8 px-4 text-center">
+            <div className="text-[color:var(--ss-accent)] scoreboard text-base mb-2">
+              No scouts on staff
+            </div>
+            <div className="text-[12px] text-white/80 max-w-md mx-auto leading-relaxed">
+              Hire scouts from the market below — they&apos;ll work the
+              transfer pool every week and surface players that match
+              their region + position brief.
+            </div>
+          </div>
+        ) : (
+          <ul className="divide-y divide-[color:var(--ss-bg-deep)]">
+            {scouts.map((s, i) => (
+              <ScoutRow
+                key={s.id}
+                scout={s}
+                idx={i}
+                budget={budget}
+                hired
+                onFire={() => onFire(s.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ── Open market ─────────────────────────────────────────── */}
+      <div className="panel overflow-hidden">
+        <div className="panel-bar text-sm flex items-center gap-3">
+          <span>Scout Market</span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="ml-auto btn btn-info !rounded-none text-[10px] px-3 py-1"
+            title="Roll a fresh roster of available scouts · £5,000"
+          >
+            ↻ Refresh · £5,000
+          </button>
+        </div>
+        {sortedMarket.length === 0 ? (
+          <div className="bg-[color:var(--ss-bg-2)] py-8 text-center text-[12px] text-[color:var(--muted)]">
+            The market is empty. Refresh to roll a fresh roster.
+          </div>
+        ) : (
+          <ul className="divide-y divide-[color:var(--ss-bg-deep)]">
+            {sortedMarket.map((s, i) => (
+              <ScoutRow
+                key={s.id}
+                scout={s}
+                idx={i}
+                budget={budget}
+                onHire={() => onHire(s.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="panel-bar text-sm">How scouts work</div>
+        <div className="p-3 sm:p-4 text-[12px] leading-relaxed text-white/85 grid sm:grid-cols-3 gap-3">
+          <Tip title="Hire">
+            One-off signing fee + weekly wage. Wages are debited every
+            week alongside player wages.
+          </Tip>
+          <Tip title="Region & Position">
+            A scout only files reports on players inside their brief.
+            Tier-4 and tier-5 scouts often go global; tier-1s stay
+            local.
+          </Tip>
+          <Tip title="Judging">
+            Higher-tier scouts return tighter estimates of overall and
+            potential. The real numbers unlock on the player profile —
+            the estimate is what they bring back from the field.
+          </Tip>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NetCell({ k, v, alt }: { k: string; v: string; alt?: boolean }) {
+  return (
+    <div
+      className="px-3 py-2 text-[10px] uppercase tracking-[0.16em]"
+      style={{ background: alt ? "var(--ss-row-2)" : "var(--ss-row)" }}
+    >
+      <div className="text-[color:var(--muted)]">{k}</div>
+      <div className="scoreboard text-[16px] text-white">{v}</div>
+    </div>
+  );
+}
+
+function ScoutRow({
+  scout,
+  idx,
+  budget,
+  hired,
+  onHire,
+  onFire,
+}: {
+  scout: Scout;
+  idx: number;
+  budget: number;
+  hired?: boolean;
+  onHire?: () => void;
+  onFire?: () => void;
+}) {
+  const canAfford = budget >= scout.signingFee;
+  return (
+    <li
+      className="grid grid-cols-[1fr_auto] sm:grid-cols-[44px_1fr_140px_120px_140px_120px] items-stretch text-white text-[12px] sm:text-[13px] font-bold uppercase tracking-[0.04em]"
+      style={{
+        background: idx % 2 === 0 ? "var(--ss-row)" : "var(--ss-row-2)",
+      }}
+    >
+      <span
+        className="hidden sm:flex px-2 py-2 items-center justify-center"
+        title={`Tier ${scout.tier}`}
+      >
+        <Flag nationalityId={scout.nationality} width={28} />
+      </span>
+
+      <span className="px-3 py-2 flex flex-col justify-center min-w-0">
+        <span className="truncate flex items-center gap-2">
+          <span>{scout.name}</span>
+          <span
+            className="text-[10px] tracking-[0.16em]"
+            style={{ color: tierColor(scout.tier) }}
+          >
+            {tierStars(scout.tier)}
+          </span>
+        </span>
+        <span className="text-[9px] tracking-[0.16em] opacity-80 truncate">
+          Judging {scout.judging} · Potential judge {scout.potentialJudging}
+        </span>
+      </span>
+
+      <span className="hidden sm:flex px-2 py-2 flex-col justify-center text-[10px] tracking-[0.14em]">
+        <span className="opacity-70 text-[9px]">REGION</span>
+        <span className="truncate">{regionLabel(scout.focusNationId)}</span>
+      </span>
+
+      <span className="hidden sm:flex px-2 py-2 flex-col justify-center text-[10px] tracking-[0.14em]">
+        <span className="opacity-70 text-[9px]">FOCUS</span>
+        <span className="truncate">{POS_LABEL[scout.focusPosition]}</span>
+      </span>
+
+      <span className="hidden sm:flex px-2 py-2 flex-col items-end justify-center text-[10px] tracking-[0.14em] ss-stat">
+        <span className="opacity-70 text-[9px]">
+          {hired ? "WAGE" : "FEE · WAGE"}
+        </span>
+        {hired ? (
+          <span className="scoreboard text-[13px] text-[color:var(--ss-accent)]">
+            {formatValue(scout.wage)}/w
+          </span>
+        ) : (
+          <>
+            <span className="scoreboard text-[13px] text-[color:var(--ss-accent)]">
+              {formatValue(scout.signingFee)}
+            </span>
+            <span className="scoreboard text-[10px] opacity-90">
+              + {formatValue(scout.wage)}/w
+            </span>
+          </>
+        )}
+      </span>
+
+      <span className="flex items-stretch border-l border-[color:var(--ss-bg-deep)]">
+        {hired ? (
+          <button
+            type="button"
+            onClick={onFire}
+            className="btn btn-exit !rounded-none flex-1 text-[10px] px-3"
+            title="Release this scout — they leave immediately"
+          >
+            ✕ Release
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={canAfford ? onHire : undefined}
+            disabled={!canAfford}
+            className="btn btn-stat !rounded-none flex-1 text-[10px] px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={
+              canAfford
+                ? `Pay ${formatValue(scout.signingFee)} signing fee`
+                : `Insufficient budget — need ${formatValue(scout.signingFee)}`
+            }
+          >
+            ▸ Hire · {formatValue(scout.signingFee)}
+          </button>
+        )}
+      </span>
+    </li>
   );
 }

@@ -344,12 +344,76 @@ export type RoleArchetype =
   | "HighPotentialYouth"
   | "Standard";
 
+/** A football nation in the world. Each nation owns its own four-tier
+ *  league pyramid + national cup + league cup + super cup. The
+ *  continental Champions Cup / Continental Cup are shared across all
+ *  nations and pull qualifiers from each nation's top divisions every
+ *  season. See `src/data/nations.ts` for the registered list. */
+/** Geographic region — used by the career picker / league pages to
+ *  group nations and provide a filter once we get to many nations
+ *  (Sensible-Soccer-style world map). */
+export type NationRegion =
+  | "british-isles"
+  | "western"
+  | "central"
+  | "southern"
+  | "northern"
+  | "eastern";
+
+export interface Nation {
+  id: string;
+  name: string;
+  shortName: string;
+  /** Geographic region for UI grouping / filtering. */
+  region: NationRegion;
+  /** Hex colours used by the procedural <Flag /> component, ordered
+   *  for the chosen `flagOrientation`. */
+  flagColors: string[];
+  flagOrientation:
+    | "tricolore-vertical"
+    | "tricolore-horizontal"
+    | "cross-st-george"
+    | "saltire"
+    | "stripes-horizontal"
+    | "stripes-vertical"
+    | "nordic-cross"
+    | "solid";
+  /** ID prefix for procedurally-generated club ids in this nation
+   *  (e.g. "ita" → "ita_milana"). Also used as the namespace prefix
+   *  for non-English division and cup ids. */
+  idPrefix: string;
+  /** Per-tier division ids (4 entries for tiers 1..4). */
+  divisionIds: [string, string, string, string];
+  divisionNames: [string, string, string, string];
+  divisionShortNames: [string, string, string, string];
+  nationalCupId: string;
+  nationalCupName: string;
+  nationalCupShortName: string;
+  leagueCupId: string;
+  leagueCupName: string;
+  leagueCupShortName: string;
+  superCupId: string;
+  superCupName: string;
+  superCupShortName: string;
+  /** ID into the player-name pool registry (`data/names.ts`). Squads
+   *  built for clubs in this nation are biased heavily toward this
+   *  pool, with the rest of the world's pools as occasional flavour. */
+  nameNationalityId: string;
+}
+
 export interface Club {
   id: string;
   name: string;
   shortName: string;
   city: string;
   country: string;
+  /** The nation this club belongs to (e.g. "england", "italy"). Drives
+   *  which league pyramid the club sits in, where its fixtures are
+   *  scheduled, and which continental qualification slots it competes
+   *  for. Optional only for backwards compatibility with old saves —
+   *  the migration in `loadFromStorage` defaults missing values to
+   *  "england". All NEW clubs must set this. */
+  nationId?: string;
   divisionId: string;
   badge: Badge;
   homeKit: Kit;
@@ -694,6 +758,100 @@ export interface Lineup {
 }
 
 // =====================================================================
+// SCOUTING — hired scouts & their reports.
+//
+// The Phase-2 scouting system has three intertwined pieces:
+//   1. Per-player scouting still works on demand (Send Scout from a
+//      popover or profile) but now charges the club budget. See
+//      `scoutCostFor` in the store — fee scales with overall, potential,
+//      age and whether the player is at a foreign-nation club.
+//   2. Scouts the user hires from the open market draw a weekly wage
+//      from the club budget and periodically file reports — surfacing
+//      players the user might never have searched for themselves. A
+//      scout's `tier` controls how often they file, how accurate their
+//      estimates are, and how big a pool they sift through.
+//   3. Reports show the scout's *estimated* overall and potential
+//      (biased by judging) — the player is auto-added to the scouted
+//      registry so the actual numbers unlock in the profile/popover.
+// =====================================================================
+
+/** Position bucket a scout specialises in. "any" means they file on any
+ * player matching their regional focus. */
+export type ScoutFocusPos = "any" | "GK" | "DEF" | "MID" | "FWD";
+
+/** A hired or hireable scout. Tier 1 is a local stringer who covers
+ * the academies; tier 5 is a globe-trotting head scout with an eye for
+ * superstars. Wage + signing fee scale steeply with tier. */
+export interface Scout {
+  /** Stable id, generated at the moment the scout enters the market. */
+  id: string;
+  /** Display name (procedurally generated from the same name pools as
+   * players, biased to the scout's nationality). */
+  name: string;
+  /** ISO-style nationality id — used purely for the flag in the UI. */
+  nationality: string;
+  /** Star rating, 1–5. Drives wage, signing fee, judging, and how often
+   * the scout files reports during the weekly tick. */
+  tier: 1 | 2 | 3 | 4 | 5;
+  /** One-off cost paid from the club budget the moment the user hires
+   * this scout. */
+  signingFee: number;
+  /** Weekly wage paid from the club budget every `advanceWeek`. */
+  wage: number;
+  /** Accuracy (0–100) of the overall rating the scout brings back. High
+   * judging → estimates land within ±2 of the truth; low judging
+   * scatters ±10 either way. */
+  judging: number;
+  /** Accuracy (0–100) of the potential rating the scout brings back.
+   * Almost always lower than `judging` — even great scouts struggle to
+   * project a teenager. */
+  potentialJudging: number;
+  /** Region the scout actively works. Either a nation id from
+   * `NATION_IDS` (covers clubs in that nation + free agents born there)
+   * or the literal string `"global"` for top-tier scouts who roam. */
+  focusNationId: string;
+  /** Positional brief — `"any"` for generalists, otherwise a position
+   * bucket from `ScoutFocusPos`. */
+  focusPosition: ScoutFocusPos;
+  /** Career-season when the scout was hired. */
+  hiredSeason: number;
+  /** Career-week when the scout was hired. */
+  hiredWeek: number;
+  /** Career-week of the scout's most recent filed report. -1 if the
+   * scout has been hired but has yet to file. */
+  lastReportWeek: number;
+}
+
+/** A single report filed by a hired scout against a player. Auto-marks
+ * the player as scouted so the profile/popover show real numbers
+ * alongside the scout's estimates. */
+export interface ScoutReport {
+  /** Stable id for keyed React lists / dismiss actions. */
+  id: string;
+  /** Scout who filed the report. */
+  scoutId: string;
+  /** Player the report is about. */
+  playerId: string;
+  /** Career-week the report was filed. */
+  week: number;
+  /** Career-season the report was filed. */
+  season: number;
+  /** Scout's estimate of the player's overall rating, 1–99. */
+  estOverall: number;
+  /** Scout's estimate of the player's potential rating, 1–99. */
+  estPotential: number;
+  /** How confident the scout is in their numbers, 0–100. Drives the
+   * "?"-bands rendered next to the estimate in the UI. */
+  confidence: number;
+  /** Short one-line headline ("Bargain striker", "Wonderkid", ...) used
+   * as the row title in the recommendations list. */
+  summary: string;
+  /** False until the user has opened the report. New reports get a
+   * pulsing badge in the scouting page until viewed. */
+  seen: boolean;
+}
+
+// =====================================================================
 // INBOX / EVENTS
 // =====================================================================
 
@@ -715,6 +873,7 @@ export interface InboxMessage {
     | "Stadium"
     | "Cup"
     | "European"
+    | "Scout"
     | "General";
   title: string;
   body: string;
@@ -821,6 +980,27 @@ export interface Career {
    * nationality, club only — in profiles, popovers and squad lists.
    * Stored as a flat array so it serialises cleanly to localStorage. */
   scoutedPlayerIds: string[];
+  /** Scouts the manager has hired. Each scout draws a weekly wage from
+   * the club budget and periodically files reports on players that
+   * match their focus (a region of the world + a positional brief).
+   * Optional only for backwards-compatibility — the store migration
+   * defaults missing values to an empty array. */
+  scouts?: Scout[];
+  /** Rolling pool of scouts available to hire from the open market.
+   * Refreshed once per season (and on demand via `refreshScoutMarket`).
+   * Optional for back-compat. */
+  scoutMarket?: Scout[];
+  /** Recommendation reports filed by hired scouts. Each report is tied
+   * to a specific scout + player and contains the scout's best guess at
+   * the player's overall and potential (noisy, biased by judging stat).
+   * Adding the player to `scoutedPlayerIds` automatically unlocks the
+   * real stats so the user can compare scout estimate vs reality.
+   * Optional for back-compat. */
+  scoutReports?: ScoutReport[];
+  /** Career-season when the scout market was last refreshed. Used to
+   * automatically reseed the market every new season. Optional for
+   * back-compat. */
+  scoutMarketSeason?: number;
   /** When the final league fixture of a season is played, the store
    * stops short of the off-season transition and stamps a full
    * `SeasonReport` here. The /season/end page reads from this to render
@@ -966,6 +1146,13 @@ export interface GameDatabase {
   tables: Record<string, LeagueTable>;
   lineups: Record<string, Lineup>;
   inbox: InboxMessage[];
+  /** All registered football nations. Each nation owns its own four-
+   *  tier league pyramid + domestic cups; the continental Champions
+   *  Cup / Continental Cup pull qualifiers from every nation. Keyed
+   *  by nation id (e.g. "england", "italy"). Optional only for
+   *  backwards compatibility — old saves auto-migrate to a single
+   *  English nation in `loadFromStorage`. */
+  nations?: Record<string, Nation>;
 }
 
 export interface GameState {

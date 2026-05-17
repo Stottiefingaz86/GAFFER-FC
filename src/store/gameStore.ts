@@ -30,8 +30,13 @@ import { buildClubsAndPlayers } from "@/generators/teamGenerator";
 import {
   buildCompetitionsScaffold,
   COMP_IDS,
-  DIVISION_NAMES,
 } from "@/data/competitionSeeds";
+import {
+  NATIONS,
+  NATION_IDS,
+  divisionTierFor,
+  isLeagueCompetitionId,
+} from "@/data/nations";
 import {
   generateContinentalCupRoundOne,
   generateCupRoundOne,
@@ -56,6 +61,11 @@ import { formatValue } from "@/lib/playerValue";
 import { simulateMatch } from "@/engine/matchEngine";
 import { saveGame, scheduleSave, flushSave, loadGame, clearSave } from "@/engine/saveEngine";
 import { evaluateBid } from "@/engine/bidEngine";
+import {
+  costToScoutPlayer,
+  generateScoutMarket,
+  runWeeklyScouting,
+} from "@/engine/scoutingEngine";
 import { FREE_AGENT_CLUB_ID } from "@/generators/playerGenerator";
 import {
   clampPitchCoord,
@@ -133,6 +143,35 @@ interface GameStoreApi extends GameState {
    * has been explicitly scouted. */
   isPlayerScouted: (playerId: string) => boolean;
 
+  // ── Phase-2 paid scouting + scout staff ─────────────────────────
+  /** Cost (in £) to dispatch a one-off scout to this player. Returns
+   * 0 when the player is already on the user's club, already in the
+   * scouted registry, or a free agent (those buckets are free). */
+  scoutCostFor: (playerId: string) => number;
+  /** Charges the user's club budget and adds the player to the scouted
+   * registry. Returns `{ ok: false, reason: "insufficient" }` (or
+   * `"already"`) if the spend can't go through; on success returns the
+   * amount that was debited. */
+  scoutPlayerPaid: (
+    playerId: string,
+  ) => { ok: boolean; cost: number; reason?: "insufficient" | "already" | "unknown" };
+  /** Hires the scout, debiting the one-off signing fee from the user's
+   * club budget and moving the scout from `career.scoutMarket` to
+   * `career.scouts`. */
+  hireScout: (scoutId: string) => { ok: boolean; reason?: "insufficient" | "unknown" };
+  /** Releases the scout — they leave `career.scouts` immediately. No
+   * fee or compensation is paid; we treat their contract as a weekly
+   * rolling deal so the user can flex staffing during a cash crunch. */
+  fireScout: (scoutId: string) => void;
+  /** Re-rolls `career.scoutMarket`. Costs a flat £5k off the user's
+   * budget; returns false if the user can't afford the refresh. */
+  refreshScoutMarket: () => { ok: boolean; cost: number };
+  /** Flags a scout report as read. Idempotent. */
+  markScoutReportSeen: (reportId: string) => void;
+  /** Removes a scout report from `career.scoutReports`. Used by the
+   * "Dismiss" action on the recommendations tab. */
+  dismissScoutReport: (reportId: string) => void;
+
   // Selectors
   getUserClub: () => Club | null;
   getUserPlayers: () => Player[];
@@ -196,50 +235,54 @@ function buildSeasonReport(input: BuildReportInput): SeasonReport {
   const userClub = db.clubs[userClubId];
   const userDivisionId = userClub?.divisionId ?? COMP_IDS.PREMIER;
 
-  // ----- Final standings, all four divisions ------------------------
+  // ----- Final standings — every nation × tier ----------------------
+  // With multiple nations the report now contains 5 nations × 4 tiers
+  // = up to 20 standings tables, ordered nation-by-nation tier-by-tier
+  // (England Tier 1, England Tier 2, ..., Italy Tier 1, ...). The
+  // user's own division is still the primary one for headline stats.
   const standings: SeasonReportDivisionStandings[] = [];
   const divisionChampions: Array<{ divisionId: string; clubId: string }> = [];
 
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const divisionId = DIVISION_NAMES[tier].id;
-    const table = db.tables[divisionId];
-    if (!table) return;
-    const sorted = [...table.rows].sort(
-      (a, b) =>
-        b.points - a.points ||
-        b.goalDifference - a.goalDifference ||
-        b.goalsFor - a.goalsFor,
-    );
-    const rows = sorted.map((r, idx) => ({
-      clubId: r.clubId,
-      position: idx + 1,
-      played: r.played,
-      won: r.won,
-      drawn: r.drawn,
-      lost: r.lost,
-      goalsFor: r.goalsFor,
-      goalsAgainst: r.goalsAgainst,
-      points: r.points,
-    }));
+  NATIONS.forEach((nation) => {
+    nation.divisionIds.forEach((divisionId, idx) => {
+      const tier = (idx + 1) as 1 | 2 | 3 | 4;
+      const table = db.tables[divisionId];
+      if (!table) return;
+      const sorted = [...table.rows].sort(
+        (a, b) =>
+          b.points - a.points ||
+          b.goalDifference - a.goalDifference ||
+          b.goalsFor - a.goalsFor,
+      );
+      const rows = sorted.map((r, i) => ({
+        clubId: r.clubId,
+        position: i + 1,
+        played: r.played,
+        won: r.won,
+        drawn: r.drawn,
+        lost: r.lost,
+        goalsFor: r.goalsFor,
+        goalsAgainst: r.goalsAgainst,
+        points: r.points,
+      }));
 
-    // Promotion zone: top 3 of D1/D2/D3 only (Premier doesn't promote
-    // anywhere). Relegation zone: bottom 3 of Prem/D1/D2 (D3 has nowhere
-    // to fall). These are presentational only — the actual league
-    // shuffle is deferred to a future patch but we still surface the
-    // narrative.
-    const total = rows.length;
-    const promotedClubIds =
-      tier > 1 ? rows.slice(0, 3).map((r) => r.clubId) : [];
-    const relegatedClubIds =
-      tier < 4 && total >= 3
-        ? rows.slice(total - 3).map((r) => r.clubId)
-        : [];
+      // Promotion zone: top 3 of every non-top tier; Relegation zone:
+      // bottom 3 of every non-bottom tier. Tier 1 has no promotion
+      // anywhere; tier 4 has no relegation anywhere.
+      const total = rows.length;
+      const promotedClubIds =
+        tier > 1 ? rows.slice(0, 3).map((r) => r.clubId) : [];
+      const relegatedClubIds =
+        tier < 4 && total >= 3
+          ? rows.slice(total - 3).map((r) => r.clubId)
+          : [];
 
-    standings.push({ divisionId, rows, promotedClubIds, relegatedClubIds });
+      standings.push({ divisionId, rows, promotedClubIds, relegatedClubIds });
 
-    if (rows.length > 0) {
-      divisionChampions.push({ divisionId, clubId: rows[0].clubId });
-    }
+      if (rows.length > 0) {
+        divisionChampions.push({ divisionId, clubId: rows[0].clubId });
+      }
+    });
   });
 
   // ----- User row + qualification flags -----------------------------
@@ -247,11 +290,18 @@ function buildSeasonReport(input: BuildReportInput): SeasonReport {
   const userRow = userDivStandings?.rows.find((r) => r.clubId === userClubId) ?? null;
   const userFinalPosition = userRow?.position ?? null;
 
-  const isPremier = userDivisionId === COMP_IDS.PREMIER;
+  // Champions Cup qualification: top 4 of THE USER'S nation's top
+  // flight (matches the pyramidEngine rules). Continental Cup:
+  // positions 5-8 of the same top flight.
+  const userDivLookup = divisionTierFor(userDivisionId);
+  const isTopFlight = userDivLookup?.tier === 1;
   const championsCupQualified =
-    isPremier && userFinalPosition !== null && userFinalPosition <= 4;
+    isTopFlight && userFinalPosition !== null && userFinalPosition <= 4;
   const continentalCupQualified =
-    isPremier && userFinalPosition !== null && userFinalPosition >= 5 && userFinalPosition <= 6;
+    isTopFlight &&
+    userFinalPosition !== null &&
+    userFinalPosition >= 5 &&
+    userFinalPosition <= 8;
   const promoted = !!userDivStandings?.promotedClubIds.includes(userClubId);
   const relegated = !!userDivStandings?.relegatedClubIds.includes(userClubId);
 
@@ -364,45 +414,68 @@ function buildInitialDatabase(seed: string): {
   const { clubs, players, divisionToClubIds } = buildClubsAndPlayers(rng);
   const competitions = buildCompetitionsScaffold();
 
-  // Wire teams into competitions.
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const id = DIVISION_NAMES[tier].id;
-    competitions[id].teamIds = divisionToClubIds[id];
+  // Wire teams into every nation's leagues.
+  NATIONS.forEach((nation) => {
+    nation.divisionIds.forEach((id) => {
+      if (competitions[id]) {
+        competitions[id].teamIds = divisionToClubIds[id] ?? [];
+      }
+    });
   });
-  const allClubIds = Object.keys(clubs);
-  competitions[COMP_IDS.NATIONAL_CUP].teamIds = allClubIds;
-  competitions[COMP_IDS.LEAGUE_CUP].teamIds = allClubIds;
 
-  // Generate fixtures for all 4 leagues.
+  // Each nation's domestic cups + super cup are entered by every
+  // club in THAT nation only — i.e. an Italian club doesn't enter
+  // the National Cup. We group club ids by nationId to build these.
+  const clubIdsByNation: Record<string, string[]> = {};
+  Object.values(clubs).forEach((c) => {
+    const nid = c.nationId ?? NATION_IDS.ENGLAND;
+    if (!clubIdsByNation[nid]) clubIdsByNation[nid] = [];
+    clubIdsByNation[nid].push(c.id);
+  });
+  NATIONS.forEach((nation) => {
+    const ids = clubIdsByNation[nation.id] ?? [];
+    if (competitions[nation.nationalCupId]) competitions[nation.nationalCupId].teamIds = ids;
+    if (competitions[nation.leagueCupId]) competitions[nation.leagueCupId].teamIds = ids;
+  });
+
+  // Generate fixtures for every nation's 4 leagues + 2 domestic cups.
   const fixtures: Fixture[] = [];
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const id = DIVISION_NAMES[tier].id;
-    fixtures.push(
-      ...generateLeagueFixtures(id, divisionToClubIds[id], rng.fork(`fx_${id}`))
-    );
+  NATIONS.forEach((nation) => {
+    nation.divisionIds.forEach((id) => {
+      const teamIds = divisionToClubIds[id] ?? [];
+      if (teamIds.length < 2) return;
+      fixtures.push(...generateLeagueFixtures(id, teamIds, rng.fork(`fx_${id}`)));
+    });
+    const ids = clubIdsByNation[nation.id] ?? [];
+    if (ids.length >= 4) {
+      fixtures.push(
+        ...generateCupRoundOne(nation.nationalCupId, ids, 4, rng.fork(`ncup_${nation.id}`)),
+      );
+      fixtures.push(
+        ...generateCupRoundOne(nation.leagueCupId, ids, 6, rng.fork(`lcup_${nation.id}`)),
+      );
+    }
   });
 
-  // Cup round one placeholders (every 6 weeks)
-  fixtures.push(
-    ...generateCupRoundOne(COMP_IDS.NATIONAL_CUP, allClubIds, 4, rng.fork("ncup"))
-  );
-  fixtures.push(
-    ...generateCupRoundOne(COMP_IDS.LEAGUE_CUP, allClubIds, 6, rng.fork("lcup"))
-  );
-
-  // Build empty league tables.
+  // Build empty league tables for every nation × tier.
   const tables: Record<string, ReturnType<typeof emptyTable>> = {};
-  ([1, 2, 3, 4] as const).forEach((tier) => {
-    const id = DIVISION_NAMES[tier].id;
-    tables[id] = emptyTable(id, divisionToClubIds[id]);
+  NATIONS.forEach((nation) => {
+    nation.divisionIds.forEach((id) => {
+      tables[id] = emptyTable(id, divisionToClubIds[id] ?? []);
+    });
   });
 
-  // Build default lineups for all clubs.
+  // Build default lineups for all clubs across every nation.
   const lineups: Record<string, Lineup> = {};
   Object.values(clubs).forEach((club) => {
     const squad = Object.values(players).filter((p) => p.clubId === club.id);
     lineups[club.id] = autoLineup(club, squad, "4-4-2");
   });
+
+  // Stash the registered nations on the DB so UI / save migrations
+  // can iterate them without re-importing the static registry.
+  const nationsMap: Record<string, typeof NATIONS[number]> = {};
+  NATIONS.forEach((n) => { nationsMap[n.id] = n; });
 
   return {
     db: {
@@ -413,6 +486,7 @@ function buildInitialDatabase(seed: string): {
       tables,
       lineups,
       inbox: [],
+      nations: nationsMap,
     },
     inboxOpener: [],
   };
@@ -435,8 +509,9 @@ export const useGame = create<GameStoreApi>((set, get) => ({
     // managers picked the same world seed they'd otherwise share
     // identical week-by-week dice rolls.
     const careerSalt = `${managerName}-${clubId}-${Date.now()}`;
+    const careerId = `car_${hashStringToSeed(careerSalt).toString(16)}`;
     const career: Career = {
-      id: `car_${hashStringToSeed(careerSalt).toString(16)}`,
+      id: careerId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       managerName,
@@ -445,6 +520,12 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       week: 1,
       manager: makeManager(managerName),
       scoutedPlayerIds: [],
+      scouts: [],
+      scoutReports: [],
+      // Seed the initial scout market so the user can hire someone the
+      // moment they open the Scouting screen for the first time.
+      scoutMarket: generateScoutMarket(`${careerId}_market_s1`, 1, 1),
+      scoutMarketSeason: 1,
     };
 
     const club = db.clubs[clubId];
@@ -598,6 +679,21 @@ export const useGame = create<GameStoreApi>((set, get) => ({
     if (!Array.isArray(career.scoutedPlayerIds)) {
       career.scoutedPlayerIds = [];
     }
+    // Phase-2 scouting — staff + market + reports are all new fields.
+    // Older saves never had any of these, so default to empty arrays
+    // and let the user opt in by hiring scouts. The market gets seeded
+    // lazily the first time the scouting page is opened (or here on
+    // load if it's still empty when the season starts).
+    if (!Array.isArray(career.scouts)) career.scouts = [];
+    if (!Array.isArray(career.scoutReports)) career.scoutReports = [];
+    if (!Array.isArray(career.scoutMarket) || career.scoutMarket.length === 0) {
+      career.scoutMarket = generateScoutMarket(
+        `${career.id}_market_s${career.season}`,
+        career.season,
+        career.week,
+      );
+      career.scoutMarketSeason = career.season;
+    }
     // ===== League table self-heal =====
     // The league table is *derived* from the fixtures ledger — every
     // played fixture has a stored `result`, and the table is meant to
@@ -626,7 +722,39 @@ export const useGame = create<GameStoreApi>((set, get) => ({
         });
       tables[divId] = rebuilt;
     });
-    const db = { ...data.db, players, clubs, tables };
+    // ===== Multi-nation migration =====
+    // Old saves were single-nation (English) and don't carry a
+    // `nations` map or `nationId` on each Club. Backfill both so the
+    // pyramid engine + UI can iterate every nation safely. We default
+    // every existing club to England — old worlds were 100% English
+    // anyway. NEW worlds (created on this version onward) ship with
+    // these fields populated by the world generator.
+    let migrated = false;
+    Object.keys(clubs).forEach((id) => {
+      const c = clubs[id];
+      if (!c.nationId) {
+        clubs[id] = { ...c, nationId: NATION_IDS.ENGLAND };
+        migrated = true;
+      }
+    });
+    const nationsMap: Record<string, typeof NATIONS[number]> =
+      data.db.nations && Object.keys(data.db.nations).length > 0
+        ? { ...data.db.nations }
+        : {};
+    NATIONS.forEach((n) => {
+      // Old saves only have England registered — register the rest so
+      // any UI that iterates `db.nations` sees the full registry. The
+      // CLUBS for those new nations don't exist in old saves; they
+      // start showing up only after the next season rollover.
+      if (!nationsMap[n.id]) {
+        nationsMap[n.id] = n;
+        migrated = true;
+      }
+    });
+    if (migrated) {
+      console.info("[migration] Upgraded save to multi-nation schema (defaulted to England)");
+    }
+    const db = { ...data.db, players, clubs, tables, nations: nationsMap };
     set({ career, db });
     return true;
   },
@@ -787,7 +915,7 @@ export const useGame = create<GameStoreApi>((set, get) => ({
           awayLineup,
           homeRivalry: home.rivalClubId === away.id,
           awayRivalry: away.rivalClubId === home.id,
-          isCupGame: !fx.competitionId.startsWith("div_"),
+          isCupGame: !isLeagueCompetitionId(fx.competitionId),
         },
         nextDb.players,
         rng.fork(fx.id)
@@ -914,6 +1042,45 @@ export const useGame = create<GameStoreApi>((set, get) => ({
 
     let nextCareer: Career = { ...career, manager: nextManager, week: week + 1, updatedAt: new Date().toISOString() };
 
+    // ===== Weekly scouting tick =====
+    // Pay scout wages out of the user's budget and roll each hired
+    // scout for a new report. Returned patches are shallow-merged so
+    // we preserve any in-flight nextDb changes from the match loop
+    // (fixtures, tables, club mood, etc.). The scouting RNG is forked
+    // from career.id + week so reports are reproducible per save.
+    {
+      const scoutingTick = runWeeklyScouting({
+        career: nextCareer,
+        db: nextDb,
+        rng: createRng(`${career.id}_scout_w${week}`),
+      });
+      // Pull the scouting deltas back onto nextCareer / nextDb. We
+      // only merge the fields scouting actually touches so we don't
+      // clobber upstream patches from the match loop.
+      nextCareer = {
+        ...nextCareer,
+        scouts: scoutingTick.nextCareer.scouts,
+        scoutReports: scoutingTick.nextCareer.scoutReports,
+        scoutedPlayerIds: scoutingTick.nextCareer.scoutedPlayerIds,
+      };
+      if (scoutingTick.wagesPaid > 0) {
+        const userClubId = career.selectedClubId;
+        const userClub = nextDb.clubs[userClubId];
+        if (userClub) {
+          nextDb.clubs = {
+            ...nextDb.clubs,
+            [userClubId]: {
+              ...userClub,
+              budget: userClub.budget - scoutingTick.wagesPaid,
+            },
+          };
+        }
+      }
+      if (scoutingTick.inboxMessages.length > 0) {
+        nextDb.inbox = [...scoutingTick.inboxMessages, ...nextDb.inbox];
+      }
+    }
+
     // ===== Continental cup round progression =====
     // Champions Cup + Continental Cup are 8-team single-leg knockouts.
     // Round 1 fixtures get dropped into db.fixtures during the season
@@ -1007,7 +1174,7 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       ? Math.max(...nextDb.fixtures.map((f) => f.week))
       : 0;
     const allLeagueDone = nextDb.fixtures
-      .filter((f) => f.competitionId.startsWith("div_"))
+      .filter((f) => isLeagueCompetitionId(f.competitionId))
       .every((f) => f.played);
 
     if (nextCareer.week > maxFxWeek && allLeagueDone) {
@@ -1159,26 +1326,29 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       }
     });
 
-    // 3. Build fresh tables anchored on the NEW memberships.
+    // 3. Build fresh tables anchored on the NEW memberships — for
+    //    every nation × tier in the world.
     const newTables: Record<string, ReturnType<typeof emptyTable>> = {};
-    ([1, 2, 3, 4] as const).forEach((tier) => {
-      const divisionId = DIVISION_NAMES[tier].id;
-      const teamIds = pyramid.divisionMembership[divisionId] ?? [];
-      newTables[divisionId] = emptyTable(divisionId, teamIds);
+    NATIONS.forEach((nation) => {
+      nation.divisionIds.forEach((divisionId) => {
+        const teamIds = pyramid.divisionMembership[divisionId] ?? [];
+        newTables[divisionId] = emptyTable(divisionId, teamIds);
+      });
     });
 
     // 4. Update Competition.teamIds so the league screen / cups screen
-    //    see the new memberships.
+    //    see the new memberships — for every nation's leagues.
     const updatedCompetitions = { ...db.competitions };
-    ([1, 2, 3, 4] as const).forEach((tier) => {
-      const id = DIVISION_NAMES[tier].id;
-      const comp = updatedCompetitions[id];
-      if (comp) {
-        updatedCompetitions[id] = {
-          ...comp,
-          teamIds: pyramid.divisionMembership[id] ?? [],
-        };
-      }
+    NATIONS.forEach((nation) => {
+      nation.divisionIds.forEach((id) => {
+        const comp = updatedCompetitions[id];
+        if (comp) {
+          updatedCompetitions[id] = {
+            ...comp,
+            teamIds: pyramid.divisionMembership[id] ?? [],
+          };
+        }
+      });
     });
     const champsComp = updatedCompetitions[COMP_IDS.CHAMPIONS_CUP];
     if (champsComp) {
@@ -1195,22 +1365,34 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       };
     }
 
-    // 5. Regenerate fixtures with the updated memberships.
+    // 5. Regenerate fixtures with the updated memberships — every
+    //    nation's 4 leagues + 2 domestic cups.
     const newFixtures: Fixture[] = [];
-    ([1, 2, 3, 4] as const).forEach((tier) => {
-      const id = DIVISION_NAMES[tier].id;
-      const teamIds = pyramid.divisionMembership[id] ?? [];
-      if (teamIds.length >= 2 && teamIds.length % 2 === 0) {
-        newFixtures.push(
-          ...generateLeagueFixtures(id, teamIds, rolloverRng.fork(`fx_${id}`)),
-        );
-      }
+    NATIONS.forEach((nation) => {
+      nation.divisionIds.forEach((id) => {
+        const teamIds = pyramid.divisionMembership[id] ?? [];
+        if (teamIds.length >= 2 && teamIds.length % 2 === 0) {
+          newFixtures.push(
+            ...generateLeagueFixtures(id, teamIds, rolloverRng.fork(`fx_${id}`)),
+          );
+        }
+      });
     });
-    const allClubIds = Object.keys(updatedClubs);
-    newFixtures.push(
-      ...generateCupRoundOne(COMP_IDS.NATIONAL_CUP, allClubIds, 4, rolloverRng.fork("ncup")),
-      ...generateCupRoundOne(COMP_IDS.LEAGUE_CUP, allClubIds, 6, rolloverRng.fork("lcup")),
-    );
+    // Domestic cups: each cup's pool is the clubs of THAT nation only.
+    const clubIdsByNation: Record<string, string[]> = {};
+    Object.values(updatedClubs).forEach((c) => {
+      const nid = c.nationId ?? NATION_IDS.ENGLAND;
+      if (!clubIdsByNation[nid]) clubIdsByNation[nid] = [];
+      clubIdsByNation[nid].push(c.id);
+    });
+    NATIONS.forEach((nation) => {
+      const ids = clubIdsByNation[nation.id] ?? [];
+      if (ids.length < 4) return;
+      newFixtures.push(
+        ...generateCupRoundOne(nation.nationalCupId, ids, 4, rolloverRng.fork(`ncup_${nation.id}`)),
+        ...generateCupRoundOne(nation.leagueCupId, ids, 6, rolloverRng.fork(`lcup_${nation.id}`)),
+      );
+    });
 
     // Champions Cup + Continental Cup — round 1 only. Subsequent rounds
     // are appended by `advanceCupRoundsIfReady` once round 1 has been
@@ -1367,7 +1549,7 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       season: seasonClosed,
       category: "Board",
       title: report.trophies.some(
-        (t) => t.position === 1 && t.competitionId.startsWith("div_"),
+        (t) => t.position === 1 && isLeagueCompetitionId(t.competitionId),
       )
         ? `Season ${seasonClosed} ends — CHAMPIONS!`
         : `Season ${seasonClosed} ends`,
@@ -1396,11 +1578,22 @@ export const useGame = create<GameStoreApi>((set, get) => ({
       lineups: newLineups,
       inbox: updatedInbox,
     };
+    // Refresh the open scout market for the new season — old listings
+    // get cleared out and a fresh roster of names becomes available.
+    const newSeasonNo = seasonClosed + 1;
+    const refreshedMarket = generateScoutMarket(
+      `${career.id}_market_s${newSeasonNo}`,
+      newSeasonNo,
+      1,
+    );
+
     const nextCareer: Career = {
       ...career,
-      season: seasonClosed + 1,
+      season: newSeasonNo,
       week: 1,
       pendingSeasonReport: null,
+      scoutMarket: refreshedMarket,
+      scoutMarketSeason: newSeasonNo,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1535,6 +1728,173 @@ export const useGame = create<GameStoreApi>((set, get) => ({
     return (career.scoutedPlayerIds ?? []).includes(playerId);
   },
 
+  // ──────────────────────────────────────────────────────────────────
+  // Phase-2 scouting actions
+  // ──────────────────────────────────────────────────────────────────
+
+  scoutCostFor: (playerId) => {
+    const { career, db } = get();
+    if (!career || !db) return 0;
+    const player = db.players[playerId];
+    if (!player) return 0;
+    // No charge for buckets that are always visible.
+    if (player.clubId === career.selectedClubId) return 0;
+    if (player.clubId === FREE_AGENT_CLUB_ID) return 0;
+    if ((career.scoutedPlayerIds ?? []).includes(playerId)) return 0;
+    const userClub = db.clubs[career.selectedClubId] ?? null;
+    const targetClub = db.clubs[player.clubId] ?? null;
+    return costToScoutPlayer(player, userClub, targetClub);
+  },
+
+  scoutPlayerPaid: (playerId) => {
+    const { career, db } = get();
+    if (!career || !db) return { ok: false, cost: 0, reason: "unknown" };
+    const player = db.players[playerId];
+    if (!player) return { ok: false, cost: 0, reason: "unknown" };
+    if ((career.scoutedPlayerIds ?? []).includes(playerId)) {
+      return { ok: false, cost: 0, reason: "already" };
+    }
+    const userClub = db.clubs[career.selectedClubId];
+    if (!userClub) return { ok: false, cost: 0, reason: "unknown" };
+    const targetClub = db.clubs[player.clubId] ?? null;
+    // Free agents / own club still no-op through here so the action
+    // is safe to call from any UI without pre-checking the bucket.
+    if (player.clubId === career.selectedClubId || player.clubId === FREE_AGENT_CLUB_ID) {
+      // Just mark them scouted — cost is zero.
+      get().scoutPlayer(playerId);
+      return { ok: true, cost: 0 };
+    }
+    const cost = costToScoutPlayer(player, userClub, targetClub);
+    if (userClub.budget < cost) {
+      return { ok: false, cost, reason: "insufficient" };
+    }
+
+    const nextCareer: Career = {
+      ...career,
+      scoutedPlayerIds: [...(career.scoutedPlayerIds ?? []), playerId],
+      updatedAt: new Date().toISOString(),
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: {
+        ...db.clubs,
+        [userClub.id]: { ...userClub, budget: userClub.budget - cost },
+      },
+    };
+    set({ career: nextCareer, db: nextDb });
+    scheduleSave(nextCareer, nextDb);
+    return { ok: true, cost };
+  },
+
+  hireScout: (scoutId) => {
+    const { career, db } = get();
+    if (!career || !db) return { ok: false, reason: "unknown" };
+    const market = career.scoutMarket ?? [];
+    const scout = market.find((s) => s.id === scoutId);
+    if (!scout) return { ok: false, reason: "unknown" };
+    const userClub = db.clubs[career.selectedClubId];
+    if (!userClub) return { ok: false, reason: "unknown" };
+    if (userClub.budget < scout.signingFee) {
+      return { ok: false, reason: "insufficient" };
+    }
+
+    const nextCareer: Career = {
+      ...career,
+      scouts: [...(career.scouts ?? []), {
+        ...scout,
+        hiredSeason: career.season,
+        hiredWeek: career.week,
+        lastReportWeek: -1,
+      }],
+      scoutMarket: market.filter((s) => s.id !== scoutId),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: {
+        ...db.clubs,
+        [userClub.id]: { ...userClub, budget: userClub.budget - scout.signingFee },
+      },
+    };
+    set({ career: nextCareer, db: nextDb });
+    scheduleSave(nextCareer, nextDb);
+    return { ok: true };
+  },
+
+  fireScout: (scoutId) => {
+    const { career, db } = get();
+    if (!career || !db) return;
+    const scouts = career.scouts ?? [];
+    if (!scouts.some((s) => s.id === scoutId)) return;
+    const nextCareer: Career = {
+      ...career,
+      scouts: scouts.filter((s) => s.id !== scoutId),
+      updatedAt: new Date().toISOString(),
+    };
+    set({ career: nextCareer });
+    scheduleSave(nextCareer, db);
+  },
+
+  refreshScoutMarket: () => {
+    const { career, db } = get();
+    if (!career || !db) return { ok: false, cost: 0 };
+    const userClub = db.clubs[career.selectedClubId];
+    if (!userClub) return { ok: false, cost: 0 };
+    const cost = 5_000;
+    if (userClub.budget < cost) return { ok: false, cost };
+
+    // Seed includes a wall-clock nonce so the user can refresh
+    // repeatedly within a single week and get genuinely different
+    // rosters rather than the same deterministic re-roll.
+    const seed = `${career.id}_market_s${career.season}_w${career.week}_${Date.now()}`;
+    const nextCareer: Career = {
+      ...career,
+      scoutMarket: generateScoutMarket(seed, career.season, career.week),
+      scoutMarketSeason: career.season,
+      updatedAt: new Date().toISOString(),
+    };
+    const nextDb: GameDatabase = {
+      ...db,
+      clubs: {
+        ...db.clubs,
+        [userClub.id]: { ...userClub, budget: userClub.budget - cost },
+      },
+    };
+    set({ career: nextCareer, db: nextDb });
+    scheduleSave(nextCareer, nextDb);
+    return { ok: true, cost };
+  },
+
+  markScoutReportSeen: (reportId) => {
+    const { career, db } = get();
+    if (!career || !db) return;
+    const reports = career.scoutReports ?? [];
+    let changed = false;
+    const next = reports.map((r) => {
+      if (r.id !== reportId || r.seen) return r;
+      changed = true;
+      return { ...r, seen: true };
+    });
+    if (!changed) return;
+    const nextCareer: Career = { ...career, scoutReports: next };
+    set({ career: nextCareer });
+    scheduleSave(nextCareer, db);
+  },
+
+  dismissScoutReport: (reportId) => {
+    const { career, db } = get();
+    if (!career || !db) return;
+    const reports = career.scoutReports ?? [];
+    if (!reports.some((r) => r.id === reportId)) return;
+    const nextCareer: Career = {
+      ...career,
+      scoutReports: reports.filter((r) => r.id !== reportId),
+      updatedAt: new Date().toISOString(),
+    };
+    set({ career: nextCareer });
+    scheduleSave(nextCareer, db);
+  },
+
   getUserClub: () => {
     const { db, career } = get();
     if (!db || !career) return null;
@@ -1571,7 +1931,7 @@ export const useGame = create<GameStoreApi>((set, get) => ({
   getDivisionFixturesForWeek: (week) => {
     const { db } = get();
     if (!db) return [];
-    return db.fixtures.filter((f) => f.week === week && f.competitionId.startsWith("div_"));
+    return db.fixtures.filter((f) => f.week === week && isLeagueCompetitionId(f.competitionId));
   },
 }));
 

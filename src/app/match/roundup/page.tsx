@@ -14,6 +14,7 @@ import {
   type MatchDay,
 } from "@/types/game";
 import { COMP_IDS } from "@/data/competitionSeeds";
+import { isLeagueCompetitionId } from "@/data/nations";
 
 /** Display order so we always render Prem → D1 → D2 → D3 → cups within a day. */
 const COMP_ORDER: string[] = [
@@ -32,7 +33,7 @@ const COMP_ORDER: string[] = [
  * cup ties default Wednesday. */
 function dayFor(fx: Fixture): MatchDay {
   if (fx.dayOfWeek) return fx.dayOfWeek;
-  return fx.competitionId.startsWith("div_") ? "SAT" : "WED";
+  return isLeagueCompetitionId(fx.competitionId) ? "SAT" : "WED";
 }
 
 export default function MatchRoundupPage() {

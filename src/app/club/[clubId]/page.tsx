@@ -13,6 +13,7 @@ import { PlayerProfile } from "@/components/game/PlayerProfile";
 import { toast } from "@/components/game/Toaster";
 import { useGame } from "@/store/gameStore";
 import { DIVISION_NAMES } from "@/data/competitionSeeds";
+import { divisionTierFor, nationOfCompetition } from "@/data/nations";
 import { readableOn } from "@/lib/color";
 import { formatValue, formatWage } from "@/lib/playerValue";
 import { competitionLabel } from "@/engine/historyEngine";
@@ -63,8 +64,8 @@ function ClubViewInner({ clubId }: { clubId: string }) {
   // player scouted?" once each on every render.
   const scoutedIds = useGame((s) => s.career?.scoutedPlayerIds);
   const scoutedSet = useMemo(() => new Set(scoutedIds ?? []), [scoutedIds]);
-  const scoutPlayer = useGame((s) => s.scoutPlayer);
-  const scoutClub = useGame((s) => s.scoutClub);
+  const scoutPlayerPaid = useGame((s) => s.scoutPlayerPaid);
+  const scoutCostFor = useGame((s) => s.scoutCostFor);
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>("squad");
@@ -132,8 +133,11 @@ function ClubViewInner({ clubId }: { clubId: string }) {
   // "Scout this club" CTA labelling.
   const squadScouted = squad.filter(isPlayerVisible).length;
   const allSquadScouted = squadScouted === squad.length;
-  const division = Object.values(DIVISION_NAMES).find((d) => d.id === club.divisionId);
-  const divisionName = division?.name ?? "Unknown Division";
+  const lookup = divisionTierFor(club.divisionId);
+  const nation = nationOfCompetition(club.divisionId);
+  const divisionName = lookup && nation
+    ? nation.divisionNames[lookup.tier - 1]
+    : Object.values(DIVISION_NAMES).find((d) => d.id === club.divisionId)?.name ?? "Unknown Division";
 
   const table = db.tables[club.divisionId];
   const positionRow = table?.rows.find((r) => r.clubId === club.id);
@@ -188,16 +192,46 @@ function ClubViewInner({ clubId }: { clubId: string }) {
     }
     router.push(`/bid/${target.id}`);
   };
-  // SCOUT ENTIRE CLUB — adds every player here to the scouted set so
-  // the squad list is fully visible. Idempotent, free for now (Phase 2
-  // will add a budget cost and a multi-week wait time).
+  // SCOUT ENTIRE CLUB — runs the paid per-player scout flow for every
+  // player on this squad we haven't already filed a report on. The
+  // total cost is the sum of per-player fees (top-tier squads cost a
+  // lot more than league-of-promise sides) and is gated by budget.
+  const unscoutedSquad = squad.filter((p) => !isPlayerVisible(p));
+  const fullClubScoutCost = unscoutedSquad.reduce(
+    (sum, p) => sum + scoutCostFor(p.id),
+    0,
+  );
+  const canAffordFullClub =
+    !!userClub && userClub.budget >= fullClubScoutCost;
   const onScout = () => {
     if (allSquadScouted) {
       toast(`${club.shortName} fully scouted`, "info");
       return;
     }
-    scoutClub(club.id);
-    toast(`${club.shortName} scouted · ${squad.length} players reported`, "success");
+    if (!canAffordFullClub) {
+      toast(
+        `Need ${formatValue(fullClubScoutCost)} to scout the rest of this squad`,
+        "warn",
+      );
+      return;
+    }
+    let okCount = 0;
+    let spent = 0;
+    for (const p of unscoutedSquad) {
+      const result = scoutPlayerPaid(p.id);
+      if (result.ok) {
+        okCount += 1;
+        spent += result.cost;
+      } else {
+        // Per-player budget gate caught us mid-run — surface the partial
+        // result rather than silently bailing on the rest.
+        break;
+      }
+    }
+    toast(
+      `Scouted ${okCount} player${okCount === 1 ? "" : "s"} · ${formatValue(spent)} paid`,
+      "success",
+    );
   };
 
   return (
@@ -376,20 +410,40 @@ function ClubViewInner({ clubId }: { clubId: string }) {
                   {GROUP_LABEL[g]} · {list.length}
                 </div>
                 <ul>
-                  {list.map((p, i) => (
-                    <SquadRow
-                      key={p.id}
-                      p={p}
-                      idx={i}
-                      isScouted={isPlayerVisible(p)}
-                      onClick={() => setOpenPlayerId(p.id)}
-                      onBid={() => onMakeBid(p)}
-                      onScout={() => {
-                        scoutPlayer(p.id);
-                        toast(`${p.lastName} scouted`, "success");
-                      }}
-                    />
-                  ))}
+                  {list.map((p, i) => {
+                    const cost = scoutCostFor(p.id);
+                    const canAfford = !userClub || cost === 0 || userClub.budget >= cost;
+                    return (
+                      <SquadRow
+                        key={p.id}
+                        p={p}
+                        idx={i}
+                        isScouted={isPlayerVisible(p)}
+                        scoutCost={cost}
+                        canAffordScout={canAfford}
+                        onClick={() => setOpenPlayerId(p.id)}
+                        onBid={() => onMakeBid(p)}
+                        onScout={() => {
+                          const result = scoutPlayerPaid(p.id);
+                          if (result.ok) {
+                            toast(
+                              result.cost > 0
+                                ? `${p.lastName} scouted · ${formatValue(result.cost)} paid`
+                                : `${p.lastName} scouted`,
+                              "success",
+                            );
+                          } else if (result.reason === "insufficient") {
+                            toast(
+                              `Insufficient funds — need ${formatValue(result.cost)}`,
+                              "warn",
+                            );
+                          } else {
+                            toast("Could not scout this player", "warn");
+                          }
+                        }}
+                      />
+                    );
+                  })}
                 </ul>
               </div>
             );
@@ -515,21 +569,23 @@ function ClubViewInner({ clubId }: { clubId: string }) {
         </Link>
         <button
           onClick={onScout}
-          disabled={isOwnClub || allSquadScouted}
+          disabled={isOwnClub || allSquadScouted || !canAffordFullClub}
           className="btn btn-action !rounded-none border-0 border-r-2 border-[color:var(--ss-bg-deep)] h-12 disabled:opacity-50"
           title={
             isOwnClub
               ? "Can't scout your own club"
               : allSquadScouted
                 ? "Whole squad already scouted"
-                : "Send scouts to file reports on every player here"
+                : !canAffordFullClub
+                  ? `Need ${formatValue(fullClubScoutCost)} to scout the rest of this squad`
+                  : `Send scouts to file reports on every unscouted player here · ${formatValue(fullClubScoutCost)}`
           }
         >
           {isOwnClub
             ? "Scout"
             : allSquadScouted
               ? "✓ Scouted"
-              : `Scout (${squadScouted}/${squad.length})`}
+              : `Scout · ${formatValue(fullClubScoutCost)}`}
         </button>
         <button
           onClick={() => onMakeBid()}
@@ -569,12 +625,32 @@ function ClubViewInner({ clubId }: { clubId: string }) {
                 secondaryColor={secondary}
                 ownPlayer={isOwnClub}
                 isScouted={isPlayerVisible(openPlayer)}
+                scoutCost={isOwnClub ? 0 : scoutCostFor(openPlayer.id)}
+                canAffordScout={
+                  isOwnClub ||
+                  !userClub ||
+                  userClub.budget >= scoutCostFor(openPlayer.id)
+                }
                 onSendScout={
                   isOwnClub
                     ? undefined
                     : () => {
-                        scoutPlayer(openPlayer.id);
-                        toast(`${openPlayer.lastName} scouted`, "success");
+                        const result = scoutPlayerPaid(openPlayer.id);
+                        if (result.ok) {
+                          toast(
+                            result.cost > 0
+                              ? `${openPlayer.lastName} scouted · ${formatValue(result.cost)} paid`
+                              : `${openPlayer.lastName} scouted`,
+                            "success",
+                          );
+                        } else if (result.reason === "insufficient") {
+                          toast(
+                            `Insufficient funds — need ${formatValue(result.cost)}`,
+                            "warn",
+                          );
+                        } else {
+                          toast("Could not file scout report", "warn");
+                        }
                       }
                 }
                 onClose={() => setOpenPlayerId(null)}
@@ -597,6 +673,8 @@ function SquadRow({
   p,
   idx,
   isScouted,
+  scoutCost,
+  canAffordScout,
   onClick,
   onBid,
   onScout,
@@ -606,6 +684,12 @@ function SquadRow({
   /** When false this player hasn't been scouted yet — OVR / quality
    * tier / value are redacted and a "Scout" button replaces "Bid". */
   isScouted: boolean;
+  /** £ cost to dispatch a scout to this player. Surfaced on the row's
+   * scout CTA so the user sees the spend at a glance. */
+  scoutCost: number;
+  /** Whether the user's budget covers `scoutCost`. Drives the
+   * disabled state of the scout CTA. */
+  canAffordScout: boolean;
   onClick: () => void;
   onBid: () => void;
   onScout: () => void;
@@ -752,12 +836,23 @@ function SquadRow({
         <button
           onClick={(e) => {
             e.stopPropagation();
+            if (!canAffordScout) return;
             onScout();
           }}
-          className="btn btn-info !rounded-none h-8 mx-1 text-[10px] tracking-[0.14em]"
-          title="Send a scout to file a full report"
+          disabled={!canAffordScout}
+          className="btn btn-info !rounded-none h-8 mx-1 text-[10px] tracking-[0.14em] disabled:opacity-40 disabled:cursor-not-allowed flex flex-col items-center justify-center leading-tight"
+          title={
+            !canAffordScout
+              ? `Insufficient budget — need ${formatValue(scoutCost)}`
+              : `Send a scout · ${formatValue(scoutCost)}`
+          }
         >
-          🔍 SCOUT
+          <span>🔍 SCOUT</span>
+          {scoutCost > 0 && (
+            <span className="text-[8px] tracking-[0.1em] opacity-90 mt-0.5">
+              {formatValue(scoutCost)}
+            </span>
+          )}
         </button>
       )}
     </li>
@@ -1023,12 +1118,16 @@ function positionColorForFinish(p: number): string {
 }
 
 function compRank(id: string): number {
-  if (id === "div_premier") return 0;
-  if (id === "div_one") return 1;
-  if (id === "div_two") return 2;
-  if (id === "div_three") return 3;
-  if (id === "national_cup") return 4;
-  if (id === "league_cup") return 5;
+  // Leagues sort before cups; within leagues sort by tier so the user's
+  // top flight appears first regardless of which nation it is.
+  const lookup = divisionTierFor(id);
+  if (lookup) return lookup.tier - 1; // 0..3
+  const nation = nationOfCompetition(id);
+  if (nation?.nationalCupId === id) return 4;
+  if (nation?.leagueCupId === id) return 5;
+  if (nation?.superCupId === id) return 6;
+  if (id === "champions_cup") return 7;
+  if (id === "continental_cup") return 8;
   return 99;
 }
 

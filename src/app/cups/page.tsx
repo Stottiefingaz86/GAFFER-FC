@@ -1,18 +1,12 @@
 "use client";
 
+import { useMemo } from "react";
 import { AppShell } from "@/components/game/AppShell";
 import { TeamCrest } from "@/components/game/TeamCrest";
 import { ClubLink } from "@/components/game/ClubLink";
 import { useGame } from "@/store/gameStore";
 import { COMP_IDS } from "@/data/competitionSeeds";
-
-const CUPS = [
-  { id: COMP_IDS.NATIONAL_CUP, label: "National Cup", desc: "All 80 clubs · single-leg knockout" },
-  { id: COMP_IDS.LEAGUE_CUP, label: "League Cup", desc: "All 80 clubs · single-leg knockout" },
-  { id: COMP_IDS.CHAMPIONS_CUP, label: "Champions Cup", desc: "Top European clubs · groups + KO" },
-  { id: COMP_IDS.CONTINENTAL_CUP, label: "Continental Cup", desc: "Secondary European · groups + KO" },
-  { id: COMP_IDS.SUPER_SHIELD, label: "Super Shield", desc: "Super cup · season opener" },
-];
+import { NATIONS, NATION_IDS, nationFor } from "@/data/nations";
 
 export default function CupsPage() {
   return (
@@ -26,10 +20,56 @@ function CupsInner() {
   const db = useGame((s) => s.db)!;
   const userClub = useGame((s) => s.getUserClub)()!;
 
+  // Show the user's nation's three domestic cups (national cup,
+  // league cup, super cup) followed by the two global continental
+  // cups. This used to be a static English-only list.
+  const cups = useMemo(() => {
+    const nationId = userClub.nationId ?? NATION_IDS.ENGLAND;
+    const nation = nationFor(nationId);
+    const domesticPool = NATIONS.find((n) => n.id === nationId);
+    const domesticPoolSize = Object.values(db.clubs).filter(
+      (c) => (c.nationId ?? NATION_IDS.ENGLAND) === nationId,
+    ).length;
+    const list = [
+      {
+        id: nation.nationalCupId,
+        label: nation.nationalCupName,
+        desc: `${domesticPoolSize} clubs · single-leg knockout`,
+      },
+      {
+        id: nation.leagueCupId,
+        label: nation.leagueCupName,
+        desc: `${domesticPoolSize} clubs · single-leg knockout`,
+      },
+      {
+        id: COMP_IDS.CHAMPIONS_CUP,
+        label: "Champions Cup",
+        desc: "Top 4 from every nation · groups + KO",
+      },
+      {
+        id: COMP_IDS.CONTINENTAL_CUP,
+        label: "Continental Cup",
+        desc: "Secondary European · groups + KO",
+      },
+      {
+        id: nation.superCupId,
+        label: nation.superCupName,
+        desc: "Super cup · season opener",
+      },
+    ];
+    void domesticPool;
+    return list;
+  }, [db.clubs, userClub]);
+
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {CUPS.map((c) => {
+      {cups.map((c) => {
         const comp = db.competitions[c.id];
+        // Old save might not yet have this competition registered
+        // (e.g. an English save missing the new nation-prefixed
+        // continental cup ids). Skip rather than crash — the next
+        // season rollover will materialise it.
+        if (!comp) return null;
         const fixtures = db.fixtures.filter((f) => f.competitionId === c.id);
         const userFix = fixtures.find((f) => f.homeId === userClub.id || f.awayId === userClub.id);
         const totalFixtures = fixtures.length;

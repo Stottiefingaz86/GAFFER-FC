@@ -233,6 +233,13 @@ export interface PlayerGenInput {
    * mutate it as we go. Surnames CAN still collide across clubs;
    * that's realistic and the display name disambiguates by club. */
   clubSurnames?: Set<string>;
+  /** ID of the club's home nation in the NATIONALITIES pool (e.g.
+   * "ALB" for English clubs, "ITL" for Italian, "GRM" for German).
+   * Squads built for the club are heavily biased toward this pool —
+   * the rest of the world's nationalities show up as 30-40% foreign
+   * flair. When omitted, defaults to ALB / English bias for
+   * backwards compatibility with the original single-nation world. */
+  homeNationalityId?: string;
 }
 
 /**
@@ -299,7 +306,7 @@ function shiftedBand(divisionTier: 1 | 2 | 3 | 4, strengthTier: StrengthTier): D
 }
 
 export function generatePlayer(input: PlayerGenInput): Player {
-  const { clubId, divisionTier, strengthTier, archetype, detailed, rng, registry, clubSurnames } = input;
+  const { clubId, divisionTier, strengthTier, archetype, detailed, rng, registry, clubSurnames, homeNationalityId } = input;
   const band = shiftedBand(divisionTier, strengthTier);
 
   // Determine baseline overall by archetype/division.
@@ -438,10 +445,38 @@ export function generatePlayer(input: PlayerGenInput): Player {
   const strength = rollAttribute(rng, baseline, profile.strength);
   const mentality = rollAttribute(rng, baseline, profile.mentality);
 
-  const nationalityPool = rng.pickWeighted(NATIONALITIES, [
-    // Strongly English-flavoured base, with international flavour
-    35, 8, 9, 7, 6, 5, 5, 4, 4, 3, 3, 2, 2, 2, 2, 4, 3, 2,
-  ]);
+  // Build a per-pool weight vector so each nation's clubs are
+  // dominated by their own nationality (~60% of the squad) with a
+  // healthy international sprinkling. The base weights below mirror
+  // the previous English-only world; we just override whichever pool
+  // matches `homeNationalityId` to be the dominant entry.
+  const homeNatId = homeNationalityId ?? "ALB";
+  const nationalityPool = rng.pickWeighted(
+    NATIONALITIES,
+    NATIONALITIES.map((p) => {
+      if (p.id === homeNatId) return 60;
+      // Spread the remaining ~40% over a few major football
+      // nationalities so each squad has 5-7 foreign-flavoured names.
+      switch (p.id) {
+        case "ALB": return 6;
+        case "IBR": return 6;
+        case "ITL": return 5;
+        case "GAL": return 5;
+        case "GRM": return 5;
+        case "POR": return 4;
+        case "NLD": return 4;
+        case "BRZ": return 5;
+        case "ARG": return 4;
+        case "SCN": return 3;
+        case "EAS": return 3;
+        case "AFR": return 3;
+        case "JPN": return 2;
+        case "KOR": return 2;
+        case "USA": return 2;
+        default:    return 2;
+      }
+    }),
+  );
 
   // Pick a unique name. Two layers of de-duplication:
   //   1. The world `registry` ensures no two players globally share an
@@ -575,7 +610,9 @@ export function generateSquad(
   strengthTier: StrengthTier,
   rng: Rng,
   registry?: NameRegistry,
+  opts?: { homeNationalityId?: string },
 ): Player[] {
+  const homeNationalityId = opts?.homeNationalityId;
   const players: Player[] = [];
 
   const detailedDistribution: DetailedPosition[] = [];
@@ -645,6 +682,7 @@ export function generateSquad(
         rng,
         registry,
         clubSurnames,
+        homeNationalityId,
       })
     );
   }
